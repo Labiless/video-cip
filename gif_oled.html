@@ -50,6 +50,24 @@
 
   .info { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .avviso { margin-top: 20px; font-size: 13px; color: var(--muted); }
+
+  .sezione-libreria { margin-top: 28px; border-top: 1px solid var(--line); padding-top: 16px; }
+  .sezione-libreria .bar { margin-bottom: 8px; }
+  h2 { font-size: 16px; font-weight: 600; margin: 0; }
+  button.piccolo { padding: 3px 10px; font-size: 13px; }
+  .libreria { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px;
+              grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+  .voce { position: relative; }
+  .miniatura { display: block; width: 100%; aspect-ratio: 1; padding: 0; overflow: hidden;
+               background: var(--screen); border: 2px solid transparent; }
+  .miniatura:hover { border-color: var(--line); }
+  .voce.attiva .miniatura { border-color: var(--accent); }
+  .miniatura img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .togli { position: absolute; top: 4px; right: 4px; width: 24px; height: 24px; padding: 0;
+           border-radius: 50%; border: none; background: rgba(0,0,0,.6); color: #fff;
+           line-height: 1; opacity: 0; }
+  .voce:hover .togli, .togli:focus-visible { opacity: 1; }
+  @media (hover: none) { .togli { opacity: 1; } }
 </style>
 </head>
 <body>
@@ -113,6 +131,15 @@
   </div>
   <div class="info" id="info">Nessuna GIF caricata</div>
   <div class="stato" id="statoGif"></div>
+
+  <section class="sezione-libreria">
+    <div class="bar">
+      <h2>Libreria</h2>
+      <button id="svuotaLibreria" class="piccolo">Svuota</button>
+    </div>
+    <p id="libreriaVuota">Le GIF caricate da un link compaiono qui: cliccane una per riprodurla di nuovo.</p>
+    <ul class="libreria" id="libreria"></ul>
+  </section>
 
   <div class="avviso" id="avviso"></div>
 </main>
@@ -223,9 +250,13 @@ function normalizzaUrl(u) {
   return m ? `https://media.giphy.com/media/${m[1]}/giphy.gif` : u;
 }
 
-$('formUrl').onsubmit = async ev => {
+$('formUrl').onsubmit = ev => {
   ev.preventDefault();
-  const url = normalizzaUrl($('url').value.trim());
+  caricaUrl(normalizzaUrl($('url').value.trim()));
+};
+
+async function caricaUrl(url) {
+  $('url').value = url;
   setStato($('statoGif'), 'Scarico la GIF…');
   let risposta;
   try {
@@ -237,13 +268,13 @@ $('formUrl').onsubmit = async ev => {
     return;
   }
   const t = (risposta.headers.get('content-type') || '').split(';')[0];
-  carica(await risposta.arrayBuffer(), t.startsWith('image/') ? t : 'image/gif');
-};
+  if (await carica(await risposta.arrayBuffer(), t.startsWith('image/') ? t : 'image/gif')) aggiungiALibreria(url);
+}
 
 $('scegliFile').onclick = () => $('file').click();
 $('file').onchange = async () => {
   const f = $('file').files[0];
-  if (f) carica(await f.arrayBuffer(), f.type || 'image/gif');
+  if (f) caricaFile(f);
 };
 
 const zona = $('schermi');
@@ -252,8 +283,13 @@ zona.addEventListener('dragleave', () => zona.classList.remove('trascina'));
 zona.addEventListener('drop', async ev => {
   ev.preventDefault(); zona.classList.remove('trascina');
   const f = ev.dataTransfer.files[0];
-  if (f) carica(await f.arrayBuffer(), f.type || 'image/gif');
+  if (f) caricaFile(f);
 });
+
+// I file da disco non finiscono in libreria (non hanno un link da richiamare)
+async function caricaFile(f) {
+  if (await carica(await f.arrayBuffer(), f.type || 'image/gif')) { $('url').value = ''; mostraLibreria(); }
+}
 
 // Decodifica una volta sola tutti i frame e li tiene in memoria come immagini
 async function carica(dati, t) {
@@ -274,7 +310,7 @@ async function carica(dati, t) {
     for (let i = 0; i < n; i++) {
       setStato($('statoGif'), `Decodifico i frame… ${i + 1}/${n}`);
       const { image } = await decoder.decode({ frameIndex: i });
-      if (mia !== generazione) { image.close(); nuove.forEach(b => b.close()); return; }
+      if (mia !== generazione) { image.close(); nuove.forEach(b => b.close()); return false; }
       if (!rw) {
         const w = image.displayWidth, h = image.displayHeight;
         const s = Math.min(1, MAX_LATO_SORGENTE / Math.max(w, h), Math.sqrt(BUDGET_PIXEL / (w * h * n)));
@@ -297,11 +333,55 @@ async function carica(dati, t) {
       (totale > MAX_FRAME ? ` (limitata ai primi ${MAX_FRAME})` : '');
     setStato($('statoGif'), '');
     tela.classList.add('spostabile');
+    return true;
   } catch (e) {
-    if (e.name === 'AbortError') return;  // decoder chiuso perché è arrivata un'altra GIF
-    setStato($('statoGif'), 'Impossibile leggere l\'immagine: ' + e.message, 'err');
+    // AbortError: decoder chiuso perché è arrivata un'altra GIF
+    if (e.name !== 'AbortError') setStato($('statoGif'), 'Impossibile leggere l\'immagine: ' + e.message, 'err');
+    return false;
   }
 }
+
+// ---------- Libreria ----------
+// I link caricati con successo, dal più recente; restano salvati in questo browser
+const MAX_LIBRERIA = 60;
+let libreria = [];
+try { libreria = JSON.parse(localStorage.getItem('oled-libreria')) || []; } catch (e) {}
+
+function salvaLibreria() {
+  try { localStorage.setItem('oled-libreria', JSON.stringify(libreria)); } catch (e) {}
+  mostraLibreria();
+}
+
+function aggiungiALibreria(url) {
+  libreria = [url, ...libreria.filter(u => u !== url)].slice(0, MAX_LIBRERIA);
+  salvaLibreria();
+}
+
+function mostraLibreria() {
+  const corrente = $('url').value;
+  $('libreriaVuota').hidden = libreria.length > 0;
+  $('svuotaLibreria').hidden = libreria.length === 0;
+  $('libreria').replaceChildren(...libreria.map(url => {
+    const voce = document.createElement('li');
+    voce.className = 'voce' + (url === corrente ? ' attiva' : '');
+    const apri = document.createElement('button');
+    apri.className = 'miniatura'; apri.title = url;
+    apri.onclick = () => { caricaUrl(url); };
+    const anteprima = document.createElement('img');
+    anteprima.src = url; anteprima.alt = ''; anteprima.loading = 'lazy';
+    apri.append(anteprima);
+    const togli = document.createElement('button');
+    togli.className = 'togli'; togli.textContent = '×'; togli.title = 'Rimuovi dalla libreria';
+    togli.onclick = () => { libreria = libreria.filter(u => u !== url); salvaLibreria(); };
+    voce.append(apri, togli);
+    return voce;
+  }));
+}
+
+$('svuotaLibreria').onclick = () => {
+  if (confirm('Rimuovere tutte le GIF dalla libreria?')) { libreria = []; salvaLibreria(); }
+};
+mostraLibreria();
 
 // ---------- Posizione e dimensione ----------
 let zoom = 1, ox = 0, oy = 0;  // zoom rispetto all'adattamento scelto, spostamento in pixel logici
