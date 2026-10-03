@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Disegna sugli OLED</title>
+<style>
+  :root {
+    --bg: #f6f5f1; --fg: #1f1e1b; --muted: #6b6a64; --line: #d6d4cc;
+    --accent: #1d6fd1; --screen: #0b0d10; --pixel: #8fd3ff; --danger: #b3261e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #1a1a18; --fg: #ecebe6; --muted: #a3a29b; --line: #3a3935; --accent: #5aa2f0; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 15px/1.5 -apple-system, system-ui, sans-serif; padding: 24px 16px; }
+  main { max-width: 1040px; margin: 0 auto; }
+  h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
+  p { margin: 0 0 16px; color: var(--muted); }
+  .bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+  button { font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line);
+           background: transparent; color: var(--fg); cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .4; cursor: default; }
+  #stato { color: var(--muted); font-size: 14px; }
+  #stato.ok { color: #2e8b3e; } #stato.err { color: var(--danger); }
+  .schermi { position: relative; background: var(--screen); border-radius: 10px; padding: 10px; }
+  canvas { display: block; width: 100%; aspect-ratio: 4 / 1; image-rendering: pixelated;
+           cursor: crosshair; touch-action: none; }
+  .divisore { position: absolute; top: 10px; bottom: 10px; left: 50%; width: 2px;
+              transform: translateX(-1px); background: #2a2e35; pointer-events: none; }
+  .etichette { display: flex; justify-content: space-around; color: var(--muted);
+               font-size: 13px; margin-top: 8px; }
+  .avviso { margin-top: 20px; font-size: 13px; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Disegna sugli OLED</h1>
+  <p>Clicca e trascina: ogni pixel appare in tempo reale sui due schermi affiancati (256 × 64).</p>
+
+  <div class="bar">
+    <button id="connetti" class="primary">Connetti board</button>
+    <button id="cancella">Cancella</button>
+    <span id="stato">Non connessa</span>
+  </div>
+
+  <div class="schermi">
+    <canvas id="tela" width="256" height="64"></canvas>
+    <div class="divisore"></div>
+  </div>
+  <div class="etichette"><span>Schermo sinistro</span><span>Schermo destro</span></div>
+
+  <div class="avviso" id="avviso"></div>
+</main>
+
+<script>
+const W = 256, H = 64;
+const RIGHE_GIALLE = 16;  // gli OLED bicolore hanno le prime 16 righe gialle, il resto azzurro
+const tela = document.getElementById('tela');
+const ctx = tela.getContext('2d');
+const stato = document.getElementById('stato');
+const btnConnetti = document.getElementById('connetti');
+const pixel = new Uint8Array(W * H);
+
+let porta = null, writer = null, coda = [];
+const enc = new TextEncoder();
+
+if (!('serial' in navigator)) {
+  document.getElementById('avviso').textContent =
+    'Questo browser non supporta Web Serial: apri la pagina con Chrome o Edge.';
+  btnConnetti.disabled = true;
+}
+
+function setStato(testo, tipo) { stato.textContent = testo; stato.className = tipo || ''; }
+
+function pulisciTela() {
+  ctx.fillStyle = '#0b0d10'; ctx.fillRect(0, 0, W, H);
+  pixel.fill(0);
+}
+pulisciTela();
+
+btnConnetti.onclick = async () => {
+  try {
+    porta = await navigator.serial.requestPort();
+    await porta.open({ baudRate: 115200 });
+    writer = porta.writable.getWriter();
+    setStato('Connessa', 'ok');
+    btnConnetti.disabled = true;
+    invia('C');
+  } catch (e) {
+    setStato('Connessione non riuscita: ' + e.message, 'err');
+  }
+};
+
+navigator.serial?.addEventListener('disconnect', () => {
+  writer = null; porta = null;
+  setStato('Board scollegata', 'err');
+  btnConnetti.disabled = false;
+});
+
+document.getElementById('cancella').onclick = () => { pulisciTela(); invia('C'); };
+
+function invia(cmd) { if (writer) coda.push(cmd + '\n'); }
+
+// Spedisce i comandi in blocchi, una volta per frame
+async function svuotaCoda() {
+  if (writer && coda.length) {
+    const blocco = coda.join(''); coda = [];
+    try { await writer.write(enc.encode(blocco)); }
+    catch (e) { setStato('Errore di invio: ' + e.message, 'err'); }
+  }
+  requestAnimationFrame(svuotaCoda);
+}
+requestAnimationFrame(svuotaCoda);
+
+function accendi(x, y) {
+  if (x < 0 || x >= W || y < 0 || y >= H) return;
+  const i = y * W + x;
+  if (pixel[i]) return;           // già acceso: non rimandarlo
+  pixel[i] = 1;
+  ctx.fillStyle = y < RIGHE_GIALLE ? '#ffd23f' : '#00ddff'; ctx.fillRect(x, y, 1, 1);
+  invia(`P ${x} ${y}`);
+}
+
+// Riempie i buchi tra due posizioni del mouse (Bresenham)
+function tratto(x0, y0, x1, y1) {
+  const dx = Math.abs(x1 - x0), dy = -Math.abs(y1 - y0);
+  const sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
+  let err = dx + dy;
+  while (true) {
+    accendi(x0, y0);
+    if (x0 === x1 && y0 === y1) break;
+    const e2 = 2 * err;
+    if (e2 >= dy) { err += dy; x0 += sx; }
+    if (e2 <= dx) { err += dx; y0 += sy; }
+  }
+}
+
+function coordinate(ev) {
+  const r = tela.getBoundingClientRect();
+  return [Math.floor((ev.clientX - r.left) / r.width * W),
+          Math.floor((ev.clientY - r.top) / r.height * H)];
+}
+
+let ultimo = null;
+tela.addEventListener('pointerdown', ev => {
+  tela.setPointerCapture(ev.pointerId);
+  ultimo = coordinate(ev);
+  accendi(...ultimo);
+});
+tela.addEventListener('pointermove', ev => {
+  if (!ultimo) return;
+  const p = coordinate(ev);
+  tratto(ultimo[0], ultimo[1], p[0], p[1]);
+  ultimo = p;
+});
+['pointerup', 'pointercancel'].forEach(t => tela.addEventListener(t, () => ultimo = null));
+</script>
+</body>
+</html>

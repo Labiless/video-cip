@@ -1,0 +1,480 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GIF sugli OLED</title>
+<style>
+  :root {
+    --bg: #f6f5f1; --fg: #1f1e1b; --muted: #6b6a64; --line: #d6d4cc;
+    --accent: #1d6fd1; --screen: #0b0d10; --danger: #b3261e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #1a1a18; --fg: #ecebe6; --muted: #a3a29b; --line: #3a3935; --accent: #5aa2f0; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 15px/1.5 -apple-system, system-ui, sans-serif; padding: 24px 16px; }
+  main { max-width: 1040px; margin: 0 auto; }
+  h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
+  p { margin: 0 0 16px; color: var(--muted); }
+  .bar { display: flex; gap: 8px 16px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+  button, input, select { font: inherit; color: var(--fg); }
+  button { padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line);
+           background: transparent; cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .4; cursor: default; }
+  input[type=url] { flex: 1 1 320px; min-width: 0; padding: 8px 12px; border-radius: 8px;
+                    border: 1px solid var(--line); background: transparent; }
+  select { padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); }
+  label { display: inline-flex; gap: 6px; align-items: center; font-size: 14px; color: var(--muted); }
+  .valore { min-width: 4ch; font-variant-numeric: tabular-nums; }
+  .stato { color: var(--muted); font-size: 14px; }
+  .stato.ok { color: #2e8b3e; } .stato.err { color: var(--danger); }
+
+  .schermi { position: relative; background: var(--screen); border-radius: 10px; padding: 10px;
+             outline: 2px dashed transparent; outline-offset: 4px; margin: 0 auto; }
+  .schermi.trascina { outline-color: var(--accent); }
+  canvas { display: block; width: 100%; aspect-ratio: 4 / 1; image-rendering: pixelated;
+           touch-action: none; }
+  canvas.spostabile { cursor: grab; } canvas.spostabile:active { cursor: grabbing; }
+  .divisore { position: absolute; top: 10px; bottom: 10px; left: 50%; width: 2px;
+              transform: translateX(-1px); background: #2a2e35; pointer-events: none; }
+  /* Schermi ruotati: colonna verticale 64 x 256 */
+  .schermi.verticale { width: fit-content; }
+  .schermi.verticale canvas { width: auto; height: min(70vh, 640px); aspect-ratio: 1 / 4; }
+  .schermi.verticale .divisore { top: 50%; bottom: auto; left: 10px; right: 10px; width: auto; height: 2px;
+                                 transform: translateY(-1px); }
+  .etichette { display: flex; justify-content: space-around; color: var(--muted);
+               font-size: 13px; margin: 8px 0 16px; text-align: center; }
+
+  .info { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .avviso { margin-top: 20px; font-size: 13px; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>GIF sugli OLED</h1>
+  <p>Incolla il link diretto a una GIF (o trascina un file sugli schermi): viene riprodotta sui due OLED come un unico schermo.
+     Trascina l'anteprima per spostarla, usa la rotellina o lo zoom per ridimensionarla.</p>
+
+  <div class="bar">
+    <button id="connetti" class="primary">Connetti board</button>
+    <span id="statoBoard" class="stato">Non connessa</span>
+  </div>
+
+  <form class="bar" id="formUrl">
+    <input type="url" id="url" placeholder="https://media.giphy.com/media/…/giphy.gif" required>
+    <button type="submit">Carica</button>
+    <button type="button" id="scegliFile">Da file…</button>
+    <input type="file" id="file" accept="image/gif,image/webp,image/png" hidden>
+  </form>
+
+  <div class="bar">
+    <label>Orientamento schermi
+      <select id="orientamento">
+        <option value="0">Orizzontale (256 × 64)</option>
+        <option value="90">Verticale, sinistro in alto (64 × 256)</option>
+        <option value="270">Verticale, destro in alto (64 × 256)</option>
+        <option value="180">Orizzontale capovolto (256 × 64)</option>
+      </select>
+    </label>
+  </div>
+
+  <div class="schermi" id="schermi">
+    <canvas id="tela" width="256" height="64"></canvas>
+    <div class="divisore"></div>
+  </div>
+  <div class="etichette" id="etichette"></div>
+
+  <div class="bar">
+    <button id="play" disabled>Pausa</button>
+    <label>Adattamento
+      <select id="adatta">
+        <option value="riempi">Riempi (ritaglia)</option>
+        <option value="contieni">Contieni (bande nere)</option>
+        <option value="stira">Stira</option>
+      </select>
+    </label>
+    <label>Zoom <input type="range" id="zoom" min="10" max="800" value="100">
+      <span class="valore" id="zoomValore">100%</span></label>
+    <button id="centra">Centra</button>
+  </div>
+  <div class="bar">
+    <label>Conversione
+      <select id="metodo">
+        <option value="bayer">Retino (Bayer)</option>
+        <option value="fs">Diffusione (Floyd–Steinberg)</option>
+        <option value="soglia">Soglia netta</option>
+      </select>
+    </label>
+    <label>Soglia <input type="range" id="soglia" min="0" max="255" value="128"></label>
+    <label><input type="checkbox" id="inverti"> Inverti</label>
+  </div>
+  <div class="info" id="info">Nessuna GIF caricata</div>
+  <div class="stato" id="statoGif"></div>
+
+  <div class="avviso" id="avviso"></div>
+</main>
+
+<script>
+const W = 256, H = 64;    // superficie fisica: i due schermi affiancati
+const RIGHE_GIALLE = 16;  // gli OLED bicolore hanno le prime 16 righe gialle, il resto azzurro
+const MAX_FRAME = 1000;
+const MAX_LATO_SORGENTE = 512;   // i frame originali vengono ridotti a questo lato massimo...
+const BUDGET_PIXEL = 24e6;       // ...e comunque entro questo totale, per non riempire la memoria
+const $ = id => document.getElementById(id);
+const tela = $('tela'), ctx = tela.getContext('2d');
+
+// ---------- Orientamento ----------
+// Superficie logica (quella che vedi) di LW x LH; mappa[p logico] = indice del pixel fisico
+let rotazione = 0, LW = W, LH = H, img, mappa, giallo;
+
+function impostaOrientamento(r) {
+  rotazione = r;
+  [LW, LH] = r === 90 || r === 270 ? [H, W] : [W, H];
+  mappa = new Int32Array(W * H);
+  giallo = new Uint8Array(W * H);
+  // Dove finisce ogni pixel fisico ruotando gli schermi in senso orario di r gradi
+  for (let py = 0; py < H; py++) for (let px = 0; px < W; px++) {
+    const [lx, ly] = r === 90  ? [H - 1 - py, px] :
+                     r === 180 ? [W - 1 - px, H - 1 - py] :
+                     r === 270 ? [py, W - 1 - px] : [px, py];
+    mappa[ly * LW + lx] = py * W + px;
+    giallo[ly * LW + lx] = py < RIGHE_GIALLE;
+  }
+  tela.width = LW; tela.height = LH;
+  img = ctx.createImageData(LW, LH);
+  $('schermi').classList.toggle('verticale', LW < LH);
+  const etichette = { 0: ['Schermo sinistro', 'Schermo destro'], 180: ['Schermo destro', 'Schermo sinistro'],
+                      90: ['In alto: schermo sinistro · in basso: schermo destro'],
+                      270: ['In alto: schermo destro · in basso: schermo sinistro'] }[r];
+  $('etichette').replaceChildren(...etichette.map(t => Object.assign(document.createElement('span'), { textContent: t })));
+  try { localStorage.setItem('oled-orientamento', r); } catch (e) {}
+}
+
+$('orientamento').addEventListener('change', () => {
+  impostaOrientamento(+$('orientamento').value);
+  ox = oy = 0;  // la posizione precedente non ha più senso nella nuova forma
+  invalida();
+});
+
+// ---------- Seriale ----------
+let porta = null, writer = null, reader = null;
+let pronta = true, ultimoInvio = 0, inviato = -1;
+
+if (!('serial' in navigator) || !('ImageDecoder' in window)) {
+  $('avviso').textContent = 'Questo browser non supporta Web Serial o ImageDecoder: apri la pagina con Chrome o Edge.';
+  $('connetti').disabled = true;
+}
+
+function setStato(el, testo, tipo) { el.textContent = testo; el.className = 'stato ' + (tipo || ''); }
+
+$('connetti').onclick = async () => {
+  try {
+    porta = await navigator.serial.requestPort();
+    await porta.open({ baudRate: 115200 });
+    writer = porta.writable.getWriter();
+    pronta = true; inviato = -1;
+    setStato($('statoBoard'), 'Connessa', 'ok');
+    $('connetti').disabled = true;
+    leggiRisposte();
+  } catch (e) {
+    setStato($('statoBoard'), 'Connessione non riuscita: ' + e.message, 'err');
+  }
+};
+
+// La board risponde 'K' dopo aver mostrato ogni frame
+async function leggiRisposte() {
+  reader = porta.readable.getReader();
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (value.includes(75)) pronta = true;  // 'K'
+    }
+  } catch (e) { /* porta chiusa */ }
+}
+
+navigator.serial?.addEventListener('disconnect', () => {
+  writer = null; reader = null; porta = null;
+  setStato($('statoBoard'), 'Board scollegata', 'err');
+  $('connetti').disabled = false;
+});
+
+async function inviaFrame(i) {
+  pronta = false; ultimoInvio = performance.now(); inviato = i;
+  const pacchetto = new Uint8Array(1 + 2048);
+  pacchetto[0] = 70;  // 'F'
+  pacchetto.set(frame(i).byte, 1);
+  try { await writer.write(pacchetto); }
+  catch (e) { setStato($('statoBoard'), 'Errore di invio: ' + e.message, 'err'); }
+}
+
+// ---------- Caricamento GIF ----------
+let decoder = null, generazione = 0;
+let sorgenti = [];   // per frame: ImageBitmap già composto (ridotto)
+let durate = [];     // ms per frame
+let cache = [];      // per frame: { bit, byte } calcolati al bisogno con le impostazioni attuali
+
+// Accetta anche il link alla pagina Giphy e lo trasforma nel link al file
+function normalizzaUrl(u) {
+  const m = u.match(/giphy\.com\/gifs\/(?:[^/]*-)?([A-Za-z0-9]+)\/?(?:[?#].*)?$/);
+  return m ? `https://media.giphy.com/media/${m[1]}/giphy.gif` : u;
+}
+
+$('formUrl').onsubmit = async ev => {
+  ev.preventDefault();
+  const url = normalizzaUrl($('url').value.trim());
+  setStato($('statoGif'), 'Scarico la GIF…');
+  let risposta;
+  try {
+    risposta = await fetch(url);
+    if (!risposta.ok) throw new Error('HTTP ' + risposta.status);
+  } catch (e) {
+    setStato($('statoGif'), 'Impossibile scaricare la GIF: il sito non lo permette (CORS) o il link non è un file. ' +
+      'Prova un link diretto (media.giphy.com, i.imgur.com…) oppure scaricala e trascinala sugli schermi.', 'err');
+    return;
+  }
+  const t = (risposta.headers.get('content-type') || '').split(';')[0];
+  carica(await risposta.arrayBuffer(), t.startsWith('image/') ? t : 'image/gif');
+};
+
+$('scegliFile').onclick = () => $('file').click();
+$('file').onchange = async () => {
+  const f = $('file').files[0];
+  if (f) carica(await f.arrayBuffer(), f.type || 'image/gif');
+};
+
+const zona = $('schermi');
+zona.addEventListener('dragover', ev => { ev.preventDefault(); zona.classList.add('trascina'); });
+zona.addEventListener('dragleave', () => zona.classList.remove('trascina'));
+zona.addEventListener('drop', async ev => {
+  ev.preventDefault(); zona.classList.remove('trascina');
+  const f = ev.dataTransfer.files[0];
+  if (f) carica(await f.arrayBuffer(), f.type || 'image/gif');
+});
+
+// Decodifica una volta sola tutti i frame e li tiene in memoria come immagini
+async function carica(dati, t) {
+  const mia = ++generazione;  // se nel frattempo arriva un'altra GIF, questa si ferma
+  try {
+    if (!(await ImageDecoder.isTypeSupported(t))) throw new Error('formato non supportato: ' + t);
+    decoder?.close();
+    decoder = new ImageDecoder({ data: dati, type: t });
+    // I track sono disponibili solo dopo tracks.ready, il numero di frame finale dopo completed
+    await decoder.tracks.ready;
+    await decoder.completed;
+    const track = decoder.tracks.selectedTrack ?? decoder.tracks[0];
+    if (!track) throw new Error('nessuna animazione trovata nel file');
+    const totale = track.frameCount, n = Math.min(totale, MAX_FRAME);
+
+    const nuove = [], nuoveDurate = [];
+    let rw, rh;
+    for (let i = 0; i < n; i++) {
+      setStato($('statoGif'), `Decodifico i frame… ${i + 1}/${n}`);
+      const { image } = await decoder.decode({ frameIndex: i });
+      if (mia !== generazione) { image.close(); nuove.forEach(b => b.close()); return; }
+      if (!rw) {
+        const w = image.displayWidth, h = image.displayHeight;
+        const s = Math.min(1, MAX_LATO_SORGENTE / Math.max(w, h), Math.sqrt(BUDGET_PIXEL / (w * h * n)));
+        rw = Math.max(1, Math.round(w * s)); rh = Math.max(1, Math.round(h * s));
+      }
+      nuove.push(await createImageBitmap(image, { resizeWidth: rw, resizeHeight: rh, resizeQuality: 'high' }));
+      // Come i browser: durate minime o assenti diventano 100 ms
+      const ms = (image.duration || 0) / 1000;
+      nuoveDurate.push(ms > 10 ? ms : 100);
+      image.close();
+    }
+    decoder.close(); decoder = null;
+
+    sorgenti.forEach(b => b.close());
+    sorgenti = nuove; durate = nuoveDurate;
+    ox = oy = 0; impostaZoom(1);
+    avviaRiproduzione();
+    const tot = durate.reduce((a, b) => a + b, 0);
+    $('info').textContent = `${n} frame · ${(tot / 1000).toFixed(1)} s` +
+      (totale > MAX_FRAME ? ` (limitata ai primi ${MAX_FRAME})` : '');
+    setStato($('statoGif'), '');
+    tela.classList.add('spostabile');
+  } catch (e) {
+    if (e.name === 'AbortError') return;  // decoder chiuso perché è arrivata un'altra GIF
+    setStato($('statoGif'), 'Impossibile leggere l\'immagine: ' + e.message, 'err');
+  }
+}
+
+// ---------- Posizione e dimensione ----------
+let zoom = 1, ox = 0, oy = 0;  // zoom rispetto all'adattamento scelto, spostamento in pixel logici
+
+// Rettangolo occupato dalla GIF sulla superficie logica
+function rettangolo() {
+  const sw = sorgenti[0].width, sh = sorgenti[0].height, modo = $('adatta').value;
+  let dw, dh;
+  if (modo === 'stira') { dw = LW; dh = LH; }
+  else {
+    const s = modo === 'riempi' ? Math.max(LW / sw, LH / sh) : Math.min(LW / sw, LH / sh);
+    dw = sw * s; dh = sh * s;
+  }
+  dw *= zoom; dh *= zoom;
+  return [(LW - dw) / 2 + ox, (LH - dh) / 2 + oy, dw, dh];
+}
+
+function impostaZoom(z) {
+  zoom = Math.min(8, Math.max(0.1, z));
+  $('zoom').value = Math.round(zoom * 100);
+  $('zoomValore').textContent = Math.round(zoom * 100) + '%';
+}
+
+$('zoom').addEventListener('input', () => { impostaZoom($('zoom').value / 100); invalida(); });
+$('centra').onclick = () => { ox = oy = 0; impostaZoom(1); invalida(); };
+$('adatta').addEventListener('change', () => { ox = oy = 0; impostaZoom(1); invalida(); });
+
+function pixelLogici(ev) {
+  const r = tela.getBoundingClientRect();
+  return [(ev.clientX - r.left) * LW / r.width, (ev.clientY - r.top) * LH / r.height];
+}
+
+// Trascina per spostare
+let trascinaDa = null;
+tela.addEventListener('pointerdown', ev => {
+  if (!sorgenti.length) return;
+  tela.setPointerCapture(ev.pointerId);
+  trascinaDa = pixelLogici(ev);
+});
+tela.addEventListener('pointermove', ev => {
+  if (!trascinaDa) return;
+  const p = pixelLogici(ev);
+  ox += p[0] - trascinaDa[0]; oy += p[1] - trascinaDa[1];
+  trascinaDa = p;
+  invalida();
+});
+['pointerup', 'pointercancel'].forEach(t => tela.addEventListener(t, () => trascinaDa = null));
+
+// Rotellina per lo zoom, centrato sul punto sotto il mouse
+tela.addEventListener('wheel', ev => {
+  if (!sorgenti.length) return;
+  ev.preventDefault();
+  const vecchio = zoom;
+  impostaZoom(zoom * Math.exp(-ev.deltaY * 0.0015));
+  const k = zoom / vecchio, [qx, qy] = pixelLogici(ev);
+  ox = qx - LW / 2 - k * (qx - LW / 2 - ox);
+  oy = qy - LH / 2 - k * (qy - LH / 2 - oy);
+  invalida();
+}, { passive: false });
+
+// ---------- Conversione a 1 bit ----------
+const BAYER = [0,32,8,40,2,34,10,42, 48,16,56,24,50,18,58,26, 12,44,4,36,14,46,6,38, 60,28,52,20,62,30,54,22,
+               3,35,11,43,1,33,9,41, 51,19,59,27,49,17,57,25, 15,47,7,39,13,45,5,37, 63,31,55,23,61,29,53,21];
+const tmp = new OffscreenCanvas(W, W);
+const tctx = tmp.getContext('2d', { willReadFrequently: true });
+
+// Le impostazioni sono cambiate: i frame verranno ricalcolati quando servono
+function invalida() {
+  cache = [];
+  inviato = -1;  // forza il reinvio con le nuove impostazioni
+  if (sorgenti.length) mostra(indice);
+}
+
+function frame(i) { return cache[i] ??= elabora(sorgenti[i]); }
+
+function elabora(sorgente) {
+  const metodo = $('metodo').value, soglia = +$('soglia').value, inverti = $('inverti').checked;
+  tctx.fillStyle = '#000'; tctx.fillRect(0, 0, LW, LH);
+  tctx.drawImage(sorgente, ...rettangolo());
+  const rgba = tctx.getImageData(0, 0, LW, LH).data;
+
+  const v = new Float32Array(LW * LH);
+  for (let p = 0; p < LW * LH; p++) {
+    const g = (rgba[p * 4] * 299 + rgba[p * 4 + 1] * 587 + rgba[p * 4 + 2] * 114) / 1000;
+    v[p] = inverti ? 255 - g : g;
+  }
+  const bit = new Uint8Array(LW * LH);
+  for (let y = 0; y < LH; y++) for (let x = 0; x < LW; x++) {
+    const p = y * LW + x;
+    if (metodo === 'soglia') bit[p] = v[p] >= soglia;
+    else if (metodo === 'bayer') bit[p] = v[p] + (128 - soglia) > (BAYER[(y & 7) * 8 + (x & 7)] + 0.5) * 4;
+    else {
+      bit[p] = v[p] >= soglia;
+      const err = v[p] - (bit[p] ? 255 : 0);
+      if (x + 1 < LW) v[p + 1] += err * 7 / 16;
+      if (y + 1 < LH) {
+        if (x > 0) v[p + LW - 1] += err * 3 / 16;
+        v[p + LW] += err * 5 / 16;
+        if (x + 1 < LW) v[p + LW + 1] += err / 16;
+      }
+    }
+  }
+  return { bit, byte: impacchetta(bit) };
+}
+
+// Riporta i pixel logici sulla superficie fisica e li impacchetta nel formato del buffer SSD1306:
+// per ogni schermo 8 pagine da 128 byte, bit 0 = pixel in alto
+function impacchetta(bit) {
+  const fis = new Uint8Array(W * H);
+  for (let p = 0; p < W * H; p++) fis[mappa[p]] = bit[p];
+  const out = new Uint8Array(2048);
+  for (let s = 0; s < 2; s++)
+    for (let pag = 0; pag < 8; pag++)
+      for (let c = 0; c < 128; c++) {
+        let b = 0;
+        for (let k = 0; k < 8; k++) if (fis[(pag * 8 + k) * W + s * 128 + c]) b |= 1 << k;
+        out[s * 1024 + pag * 128 + c] = b;
+      }
+  return out;
+}
+
+['metodo', 'soglia', 'inverti'].forEach(id => $(id).addEventListener('input', invalida));
+
+// ---------- Riproduzione ----------
+let indice = 0, prossimoCambio = 0, inPausa = false;
+
+function mostra(i) {
+  const { bit } = frame(i), d = img.data;
+  for (let p = 0; p < LW * LH; p++) {
+    const q = p * 4, gl = giallo[p];
+    if (bit[p]) { d[q] = gl ? 0xff : 0x00; d[q + 1] = gl ? 0xd2 : 0xdd; d[q + 2] = gl ? 0x3f : 0xff; }
+    else        { d[q] = 0x0b; d[q + 1] = 0x0d; d[q + 2] = 0x10; }
+    d[q + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+function avviaRiproduzione() {
+  indice = 0; prossimoCambio = performance.now() + durate[0];
+  inPausa = false; $('play').disabled = false; $('play').textContent = 'Pausa';
+  invalida();
+}
+
+$('play').onclick = () => {
+  inPausa = !inPausa;
+  $('play').textContent = inPausa ? 'Riproduci' : 'Pausa';
+  if (!inPausa) prossimoCambio = performance.now() + durate[indice];
+};
+
+function ciclo(ora) {
+  if (sorgenti.length && !inPausa && ora >= prossimoCambio) {
+    // Se siamo molto in ritardo (scheda in background) riparte da qui invece di recuperare
+    if (ora - prossimoCambio > 1000) prossimoCambio = ora;
+    while (ora >= prossimoCambio) {
+      indice = (indice + 1) % sorgenti.length;
+      prossimoCambio += durate[indice];
+    }
+    mostra(indice);
+  }
+  // Invia l'ultimo frame solo quando la board ha finito il precedente
+  // (timeout di sicurezza nel caso una risposta vada persa)
+  if (writer && sorgenti.length && inviato !== indice &&
+      (pronta || ora - ultimoInvio > 500)) inviaFrame(indice);
+  requestAnimationFrame(ciclo);
+}
+requestAnimationFrame(ciclo);
+
+// Avvio: orientamento ricordato dall'ultima volta, schermi spenti
+let salvato = null;
+try { salvato = localStorage.getItem('oled-orientamento'); } catch (e) {}
+if (['0', '90', '180', '270'].includes(salvato)) $('orientamento').value = salvato;
+impostaOrientamento(+$('orientamento').value);
+ctx.fillStyle = '#0b0d10'; ctx.fillRect(0, 0, LW, LH);
+</script>
+</body>
+</html>
