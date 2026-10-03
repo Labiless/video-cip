@@ -6,142 +6,271 @@
 <title>GIF sugli OLED</title>
 <style>
   :root {
-    --bg: #f6f5f1; --fg: #1f1e1b; --muted: #6b6a64; --line: #d6d4cc;
-    --accent: #1d6fd1; --screen: #0b0d10; --danger: #b3261e;
+    --bg: #f4f3ef; --panel: #ffffff; --fg: #1f1e1b; --muted: #6b6a64; --line: #e2e0d8;
+    --accent: #1d6fd1; --screen: #0b0d10; --danger: #b3261e; --ok: #2e8b3e;
   }
   @media (prefers-color-scheme: dark) {
-    :root { --bg: #1a1a18; --fg: #ecebe6; --muted: #a3a29b; --line: #3a3935; --accent: #5aa2f0; }
+    :root { --bg: #141412; --panel: #1e1e1b; --fg: #ecebe6; --muted: #a3a29b; --line: #34332f;
+            --accent: #5aa2f0; --ok: #5cc06c; }
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--fg);
-         font: 15px/1.5 -apple-system, system-ui, sans-serif; padding: 24px 16px; }
-  main { max-width: 1040px; margin: 0 auto; }
-  h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
-  p { margin: 0 0 16px; color: var(--muted); }
-  .bar { display: flex; gap: 8px 16px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+         font: 14px/1.45 -apple-system, system-ui, sans-serif; padding: 20px 16px 32px; }
+  main { max-width: 1280px; margin: 0 auto; }
+  header { margin-bottom: 18px; }
+  h1 { font-size: 20px; font-weight: 650; margin: 0 0 2px; }
+  header p { margin: 0; color: var(--muted); }
+
+  /* Due colonne: controlli a sinistra, anteprima fissa a destra */
+  .layout { display: grid; grid-template-columns: minmax(320px, 400px) minmax(0, 1fr); gap: 20px;
+            align-items: start; }
+  .controlli { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+  .anteprima { position: sticky; top: 20px; }
+  @media (max-width: 860px) {
+    .layout { grid-template-columns: minmax(0, 1fr); }
+    .anteprima { position: static; order: -1; }
+  }
+
+  .pannello { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+  .pannello h2 { font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+                 color: var(--muted); margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
+  .pannello h2 .spazio { flex: 1; }
+
   button, input, select { font: inherit; color: var(--fg); }
-  button { padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line);
-           background: transparent; cursor: pointer; }
+  button { padding: 7px 12px; border-radius: 8px; border: 1px solid var(--line);
+           background: transparent; cursor: pointer; white-space: nowrap; }
+  button:hover:not(:disabled) { border-color: var(--muted); }
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   button:disabled { opacity: .4; cursor: default; }
-  input[type=url] { flex: 1 1 320px; min-width: 0; padding: 8px 12px; border-radius: 8px;
-                    border: 1px solid var(--line); background: transparent; }
-  select { padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); }
-  label { display: inline-flex; gap: 6px; align-items: center; font-size: 14px; color: var(--muted); }
-  .valore { min-width: 4ch; font-variant-numeric: tabular-nums; }
-  .stato { color: var(--muted); font-size: 14px; }
-  .stato.ok { color: #2e8b3e; } .stato.err { color: var(--danger); }
+  button.piccolo { padding: 2px 9px; font-size: 12px; text-transform: none; letter-spacing: 0; }
+  input[type=url] { flex: 1; min-width: 0; padding: 7px 10px; border-radius: 8px;
+                    border: 1px solid var(--line); background: var(--bg); }
+  select { width: 100%; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); }
+  input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
+  .fila { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .fila + .fila { margin-top: 8px; }
 
+  .stato { color: var(--muted); font-size: 13px; }
+  .stato.ok { color: var(--ok); } .stato.err { color: var(--danger); }
+  .stato:empty { display: none; }
+
+  /* Righe delle funzioni: pallino col colore del LED, nome, controllo */
+  .riga { display: grid; grid-template-columns: 12px 92px minmax(0, 1fr); gap: 10px; align-items: center;
+          padding: 7px 8px; margin: 0 -8px; border-radius: 8px; transition: background .15s, box-shadow .15s; }
+  .riga > label, .riga > .nome { color: var(--fg); }
+  .riga.disattiva { opacity: .45; }
+  .controllo { display: flex; gap: 8px; align-items: center; min-width: 0; }
+  .valore { min-width: 4.5ch; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; }
+  .suggerimento { color: var(--muted); font-size: 13px; flex: 1; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--c);
+         box-shadow: 0 0 0 1px rgba(0,0,0,.15) inset; }
+  .legenda { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 12px; margin-top: 10px; }
+  .legenda .dot { width: 8px; height: 8px; }
+
+  /* Funzione attiva dell'encoder */
+  [data-modo].encoder-attivo { background: color-mix(in srgb, var(--c) 12%, transparent);
+                               box-shadow: 0 0 0 2px var(--c) inset; }
+  .pannello[data-modo].encoder-attivo { background: color-mix(in srgb, var(--c) 6%, var(--panel)); }
+  .riga.encoder-attivo .dot { box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 35%, transparent); }
+
+  /* Interruttore per "Inverti" */
+  .interruttore { appearance: none; width: 36px; height: 20px; border-radius: 10px; margin: 0;
+                  background: var(--line); position: relative; cursor: pointer; transition: background .15s; }
+  .interruttore::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+                         border-radius: 50%; background: #fff; transition: transform .15s;
+                         box-shadow: 0 1px 2px rgba(0,0,0,.3); }
+  .interruttore:checked { background: var(--accent); }
+  .interruttore:checked::after { transform: translateX(16px); }
+
+  /* Anteprima degli schermi */
+  .anteprima .pannello { padding: 16px; }
   .schermi { position: relative; background: var(--screen); border-radius: 10px; padding: 10px;
              outline: 2px dashed transparent; outline-offset: 4px; margin: 0 auto; }
   .schermi.trascina { outline-color: var(--accent); }
-  canvas { display: block; width: 100%; aspect-ratio: 4 / 1; image-rendering: pixelated;
-           touch-action: none; }
+  canvas { display: block; width: 100%; aspect-ratio: 4 / 1; image-rendering: pixelated; touch-action: none; }
   canvas.spostabile { cursor: grab; } canvas.spostabile:active { cursor: grabbing; }
   .divisore { position: absolute; top: 10px; bottom: 10px; left: 50%; width: 2px;
               transform: translateX(-1px); background: #2a2e35; pointer-events: none; }
   /* Schermi ruotati: colonna verticale 64 x 256 */
   .schermi.verticale { width: fit-content; }
-  .schermi.verticale canvas { width: auto; height: min(70vh, 640px); aspect-ratio: 1 / 4; }
+  .schermi.verticale canvas { width: auto; height: min(68vh, 620px); aspect-ratio: 1 / 4; }
   .schermi.verticale .divisore { top: 50%; bottom: auto; left: 10px; right: 10px; width: auto; height: 2px;
                                  transform: translateY(-1px); }
   .etichette { display: flex; justify-content: space-around; color: var(--muted);
-               font-size: 13px; margin: 8px 0 16px; text-align: center; }
-
+               font-size: 12px; margin: 8px 0 12px; text-align: center; }
+  .sotto { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
   .info { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
-  .avviso { margin-top: 20px; font-size: 13px; color: var(--muted); }
+  .aiuto { margin: 12px 0 0; color: var(--muted); font-size: 12px; }
+  .avviso { margin-top: 12px; font-size: 13px; color: var(--danger); }
+  .avviso:empty { display: none; }
 
-  .sezione-libreria { margin-top: 28px; border-top: 1px solid var(--line); padding-top: 16px; }
-  .sezione-libreria .bar { margin-bottom: 8px; }
-  h2 { font-size: 16px; font-weight: 600; margin: 0; }
-  button.piccolo { padding: 3px 10px; font-size: 13px; }
-  .libreria { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px;
-              grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+  .pallino { display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+             background: var(--colore-modo); margin-right: 6px; vertical-align: -1px; }
+
+  /* Libreria */
+  .libreria { list-style: none; margin: 0; padding: 2px; display: grid; gap: 8px;
+              grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); max-height: 260px; overflow-y: auto; }
+  #libreriaVuota { margin: 0; color: var(--muted); font-size: 13px; }
   .voce { position: relative; }
   .miniatura { display: block; width: 100%; aspect-ratio: 1; padding: 0; overflow: hidden;
-               background: var(--screen); border: 2px solid transparent; }
-  .miniatura:hover { border-color: var(--line); }
+               background: var(--screen); border: 2px solid transparent; border-radius: 8px; }
+  .miniatura:hover { border-color: var(--muted); }
   .voce.attiva .miniatura { border-color: var(--accent); }
   .miniatura img { width: 100%; height: 100%; object-fit: cover; display: block; }
-  .togli { position: absolute; top: 4px; right: 4px; width: 24px; height: 24px; padding: 0;
-           border-radius: 50%; border: none; background: rgba(0,0,0,.6); color: #fff;
-           line-height: 1; opacity: 0; }
+  .togli { position: absolute; top: 3px; right: 3px; width: 20px; height: 20px; padding: 0;
+           border-radius: 50%; border: none; background: rgba(0,0,0,.65); color: #fff;
+           font-size: 13px; line-height: 1; opacity: 0; }
   .voce:hover .togli, .togli:focus-visible { opacity: 1; }
   @media (hover: none) { .togli { opacity: 1; } }
 </style>
 </head>
 <body>
 <main>
-  <h1>GIF sugli OLED</h1>
-  <p>Incolla il link diretto a una GIF (o trascina un file sugli schermi): viene riprodotta sui due OLED come un unico schermo.
-     Trascina l'anteprima per spostarla, usa la rotellina o lo zoom per ridimensionarla.</p>
+  <header>
+    <h1>GIF sugli OLED</h1>
+    <p>Riproduci una GIF sui due OLED come se fossero un unico schermo, e regolala dalla pagina o con l'encoder.</p>
+  </header>
 
-  <div class="bar">
-    <button id="connetti" class="primary">Connetti board</button>
-    <span id="statoBoard" class="stato">Non connessa</span>
-  </div>
+  <div class="layout">
+    <div class="controlli">
 
-  <form class="bar" id="formUrl">
-    <input type="url" id="url" placeholder="https://media.giphy.com/media/…/giphy.gif" required>
-    <button type="submit">Carica</button>
-    <button type="button" id="scegliFile">Da file…</button>
-    <input type="file" id="file" accept="image/gif,image/webp,image/png" hidden>
-  </form>
+      <section class="pannello">
+        <h2>Board</h2>
+        <div class="fila">
+          <button id="connetti" class="primary">Connetti board</button>
+          <span id="statoBoard" class="stato">Non connessa</span>
+        </div>
+        <div class="fila"><span id="statoEncoder" class="stato"></span></div>
+      </section>
 
-  <div class="bar">
-    <label>Orientamento schermi
-      <select id="orientamento">
-        <option value="0">Orizzontale (256 × 64)</option>
-        <option value="90">Verticale, sinistro in alto (64 × 256)</option>
-        <option value="270">Verticale, destro in alto (64 × 256)</option>
-        <option value="180">Orizzontale capovolto (256 × 64)</option>
-      </select>
-    </label>
-  </div>
+      <section class="pannello">
+        <h2>GIF</h2>
+        <form class="fila" id="formUrl">
+          <input type="url" id="url" placeholder="Link diretto a una GIF" required>
+          <button type="submit">Carica</button>
+        </form>
+        <div class="fila">
+          <button type="button" id="scegliFile">Da file…</button>
+          <span class="stato">oppure trascinala sull'anteprima</span>
+          <input type="file" id="file" accept="image/gif,image/webp,image/png" hidden>
+        </div>
+      </section>
 
-  <div class="schermi" id="schermi">
-    <canvas id="tela" width="256" height="64"></canvas>
-    <div class="divisore"></div>
-  </div>
-  <div class="etichette" id="etichette"></div>
+      <section class="pannello" data-modo="0">
+        <h2><span class="dot" title="LED rosso: l'encoder scorre la libreria"></span> Libreria
+          <span class="spazio"></span>
+          <button id="svuotaLibreria" class="piccolo">Svuota</button>
+        </h2>
+        <p id="libreriaVuota">Le GIF caricate da un link compaiono qui: cliccane una per riprodurla.</p>
+        <ul class="libreria" id="libreria"></ul>
+      </section>
 
-  <div class="bar">
-    <button id="play" disabled>Pausa</button>
-    <label>Adattamento
-      <select id="adatta">
-        <option value="riempi">Riempi (ritaglia)</option>
-        <option value="contieni">Contieni (bande nere)</option>
-        <option value="stira">Stira</option>
-      </select>
-    </label>
-    <label>Zoom <input type="range" id="zoom" min="10" max="800" value="100">
-      <span class="valore" id="zoomValore">100%</span></label>
-    <button id="centra">Centra</button>
-  </div>
-  <div class="bar">
-    <label>Conversione
-      <select id="metodo">
-        <option value="bayer">Retino (Bayer)</option>
-        <option value="fs">Diffusione (Floyd–Steinberg)</option>
-        <option value="soglia">Soglia netta</option>
-      </select>
-    </label>
-    <label>Soglia <input type="range" id="soglia" min="0" max="255" value="128"></label>
-    <label><input type="checkbox" id="inverti"> Inverti</label>
-  </div>
-  <div class="info" id="info">Nessuna GIF caricata</div>
-  <div class="stato" id="statoGif"></div>
+      <section class="pannello">
+        <h2>Inquadratura</h2>
+        <div class="riga" data-modo="6">
+          <span class="dot"></span>
+          <label for="adatta">Adattamento</label>
+          <select id="adatta">
+            <option value="riempi">Riempi (ritaglia)</option>
+            <option value="contieni">Contieni (bande nere)</option>
+            <option value="stira">Stira</option>
+          </select>
+        </div>
+        <div class="riga" data-modo="1">
+          <span class="dot"></span>
+          <label for="zoom">Zoom</label>
+          <div class="controllo">
+            <input type="range" id="zoom" min="10" max="800" value="100">
+            <span class="valore" id="zoomValore">100%</span>
+          </div>
+        </div>
+        <div class="riga" data-modo="2">
+          <span class="dot"></span>
+          <span class="nome">Posizione</span>
+          <div class="controllo">
+            <span class="suggerimento">Trascina l'anteprima</span>
+            <button id="centra" class="piccolo">Centra</button>
+          </div>
+        </div>
+      </section>
 
-  <section class="sezione-libreria">
-    <div class="bar">
-      <h2>Libreria</h2>
-      <button id="svuotaLibreria" class="piccolo">Svuota</button>
+      <section class="pannello">
+        <h2>Bianco e nero</h2>
+        <div class="riga" data-modo="5">
+          <span class="dot"></span>
+          <label for="metodo">Conversione</label>
+          <select id="metodo">
+            <option value="bayer">Retino (Bayer)</option>
+            <option value="fs">Diffusione (Floyd–Steinberg)</option>
+            <option value="soglia">Soglia netta</option>
+          </select>
+        </div>
+        <div class="riga" data-modo="3">
+          <span class="dot"></span>
+          <label for="soglia">Soglia</label>
+          <div class="controllo">
+            <input type="range" id="soglia" min="0" max="255" value="128">
+            <span class="valore" id="sogliaValore">128</span>
+          </div>
+        </div>
+        <div class="riga" data-modo="4">
+          <span class="dot"></span>
+          <label for="inverti">Inverti</label>
+          <div class="controllo"><input type="checkbox" id="inverti" class="interruttore"></div>
+        </div>
+        <div class="legenda"><span class="dot" style="--c: var(--muted)"></span>
+          Il pallino è il colore del LED quando l'encoder controlla quella funzione.</div>
+      </section>
+
+      <section class="pannello">
+        <h2>Schermi</h2>
+        <div class="riga">
+          <span></span>
+          <label for="orientamento">Orientamento</label>
+          <select id="orientamento">
+            <option value="0">Orizzontale (256 × 64)</option>
+            <option value="90">Verticale, sinistro in alto (64 × 256)</option>
+            <option value="270">Verticale, destro in alto (64 × 256)</option>
+            <option value="180">Orizzontale capovolto (256 × 64)</option>
+          </select>
+        </div>
+        <div class="riga">
+          <span></span>
+          <label for="modoSchermi">Contenuto</label>
+          <select id="modoSchermi">
+            <option value="unico">Schermo unico</option>
+            <option value="duplica">Duplicata su ogni schermo</option>
+          </select>
+        </div>
+        <div class="riga" id="rigaRitardo">
+          <span></span>
+          <label for="ritardo">Anticipo 2°</label>
+          <div class="controllo">
+            <input type="range" id="ritardo" min="0" max="1" step="0.05" value="0">
+            <span class="valore" id="ritardoValore">0,00 s</span>
+          </div>
+        </div>
+        <p class="aiuto" id="aiutoRitardo">Il secondo schermo (destro, o in basso) è avanti di questo tempo nella GIF.</p>
+      </section>
     </div>
-    <p id="libreriaVuota">Le GIF caricate da un link compaiono qui: cliccane una per riprodurla di nuovo.</p>
-    <ul class="libreria" id="libreria"></ul>
-  </section>
 
-  <div class="avviso" id="avviso"></div>
+    <aside class="anteprima">
+      <div class="pannello">
+        <div class="schermi" id="schermi">
+          <canvas id="tela" width="256" height="64"></canvas>
+          <div class="divisore"></div>
+        </div>
+        <div class="etichette" id="etichette"></div>
+        <div class="sotto">
+          <button id="play" disabled>Pausa</button>
+          <span class="info" id="info">Nessuna GIF caricata</span>
+        </div>
+        <div class="stato" id="statoGif"></div>
+        <p class="aiuto">Trascina l'anteprima per spostare la GIF, usa la rotellina per lo zoom.</p>
+        <div class="avviso" id="avviso"></div>
+      </div>
+    </aside>
+  </div>
 </main>
 
 <script>
@@ -212,13 +341,19 @@ $('connetti').onclick = async () => {
 };
 
 // La board risponde 'K' dopo aver mostrato ogni frame
+// e manda righe "E modo scatti" quando si usa l'encoder
 async function leggiRisposte() {
   reader = porta.readable.getReader();
+  let riga = '';
   try {
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
-      if (value.includes(75)) pronta = true;  // 'K'
+      for (const b of value) {
+        if (b === 75) pronta = true;  // 'K'
+        else if (b === 10) { eventoEncoder(riga); riga = ''; }
+        else if (b !== 13 && riga.length < 40) riga += String.fromCharCode(b);
+      }
     }
   } catch (e) { /* porta chiusa */ }
 }
@@ -242,6 +377,8 @@ async function inviaFrame(i) {
 let decoder = null, generazione = 0;
 let sorgenti = [];   // per frame: ImageBitmap già composto (ridotto)
 let durate = [];     // ms per frame
+let inizi = [];      // ms di inizio di ogni frame dall'inizio della GIF
+let totaleMs = 0;
 let cache = [];      // per frame: { bit, byte } calcolati al bisogno con le impostazioni attuali
 
 // Accetta anche il link alla pagina Giphy e lo trasforma nel link al file
@@ -255,20 +392,28 @@ $('formUrl').onsubmit = ev => {
   caricaUrl(normalizzaUrl($('url').value.trim()));
 };
 
-async function caricaUrl(url) {
+let richiesta = 0;
+
+// riordina = false quando si scorre la libreria con l'encoder, così l'ordine resta fermo
+async function caricaUrl(url, riordina = true) {
+  const mia = ++richiesta;  // se nel frattempo si chiede un'altra GIF, questa viene scartata
   $('url').value = url;
   setStato($('statoGif'), 'Scarico la GIF…');
   let risposta;
   try {
     risposta = await fetch(url);
     if (!risposta.ok) throw new Error('HTTP ' + risposta.status);
+    if (mia !== richiesta) return;
   } catch (e) {
+    if (mia !== richiesta) return;
     setStato($('statoGif'), 'Impossibile scaricare la GIF: il sito non lo permette (CORS) o il link non è un file. ' +
       'Prova un link diretto (media.giphy.com, i.imgur.com…) oppure scaricala e trascinala sugli schermi.', 'err');
     return;
   }
   const t = (risposta.headers.get('content-type') || '').split(';')[0];
-  if (await carica(await risposta.arrayBuffer(), t.startsWith('image/') ? t : 'image/gif')) aggiungiALibreria(url);
+  const dati = await risposta.arrayBuffer();
+  if (mia !== richiesta) return;
+  if (await carica(dati, t.startsWith('image/') ? t : 'image/gif') && riordina) aggiungiALibreria(url);
 }
 
 $('scegliFile').onclick = () => $('file').click();
@@ -326,10 +471,13 @@ async function carica(dati, t) {
 
     sorgenti.forEach(b => b.close());
     sorgenti = nuove; durate = nuoveDurate;
+    inizi = []; totaleMs = 0;
+    for (const d of durate) { inizi.push(totaleMs); totaleMs += d; }
+    $('ritardo').max = (totaleMs / 1000).toFixed(2);  // l'anticipo massimo è un giro intero
+    aggiornaRitardo();
     ox = oy = 0; impostaZoom(1);
     avviaRiproduzione();
-    const tot = durate.reduce((a, b) => a + b, 0);
-    $('info').textContent = `${n} frame · ${(tot / 1000).toFixed(1)} s` +
+    $('info').textContent = `${n} frame · ${(totaleMs / 1000).toFixed(1)} s` +
       (totale > MAX_FRAME ? ` (limitata ai primi ${MAX_FRAME})` : '');
     setStato($('statoGif'), '');
     tela.classList.add('spostabile');
@@ -386,17 +534,29 @@ mostraLibreria();
 // ---------- Posizione e dimensione ----------
 let zoom = 1, ox = 0, oy = 0;  // zoom rispetto all'adattamento scelto, spostamento in pixel logici
 
-// Rettangolo occupato dalla GIF sulla superficie logica
-function rettangolo() {
+// Zone della superficie logica in cui disegnare la GIF: una sola (schermo unico)
+// oppure una per schermo (duplicata), prima quella a sinistra/in alto
+function zone() {
+  if ($('modoSchermi').value !== 'duplica') return [[0, 0, LW, LH]];
+  return LW > LH ? [[0, 0, LW / 2, LH], [LW / 2, 0, LW / 2, LH]]
+                 : [[0, 0, LW, LH / 2], [0, LH / 2, LW, LH / 2]];
+}
+
+function zonaDi(x, y) {
+  return zone().find(([zx, zy, zw, zh]) => x >= zx && x < zx + zw && y >= zy && y < zy + zh) ?? zone()[0];
+}
+
+// Rettangolo occupato dalla GIF dentro una zona larga zw x zh (coordinate relative alla zona)
+function rettangolo(zw, zh) {
   const sw = sorgenti[0].width, sh = sorgenti[0].height, modo = $('adatta').value;
   let dw, dh;
-  if (modo === 'stira') { dw = LW; dh = LH; }
+  if (modo === 'stira') { dw = zw; dh = zh; }
   else {
-    const s = modo === 'riempi' ? Math.max(LW / sw, LH / sh) : Math.min(LW / sw, LH / sh);
+    const s = modo === 'riempi' ? Math.max(zw / sw, zh / sh) : Math.min(zw / sw, zh / sh);
     dw = sw * s; dh = sh * s;
   }
   dw *= zoom; dh *= zoom;
-  return [(LW - dw) / 2 + ox, (LH - dh) / 2 + oy, dw, dh];
+  return [(zw - dw) / 2 + ox, (zh - dh) / 2 + oy, dw, dh];
 }
 
 function impostaZoom(z) {
@@ -436,11 +596,29 @@ tela.addEventListener('wheel', ev => {
   ev.preventDefault();
   const vecchio = zoom;
   impostaZoom(zoom * Math.exp(-ev.deltaY * 0.0015));
-  const k = zoom / vecchio, [qx, qy] = pixelLogici(ev);
-  ox = qx - LW / 2 - k * (qx - LW / 2 - ox);
-  oy = qy - LH / 2 - k * (qy - LH / 2 - oy);
+  // Coordinate relative alla zona (schermo) sotto il mouse
+  const [px, py] = pixelLogici(ev), [zx, zy, zw, zh] = zonaDi(px, py);
+  const k = zoom / vecchio, qx = px - zx, qy = py - zy;
+  ox = qx - zw / 2 - k * (qx - zw / 2 - ox);
+  oy = qy - zh / 2 - k * (qy - zh / 2 - oy);
   invalida();
 }, { passive: false });
+
+// ---------- Contenuto dei due schermi ----------
+function aggiornaRitardo() {
+  const duplica = $('modoSchermi').value === 'duplica';
+  $('ritardo').disabled = !duplica;
+  $('rigaRitardo').classList.toggle('disattiva', !duplica);
+  $('aiutoRitardo').hidden = !duplica;
+  $('ritardoValore').textContent = (+$('ritardo').value).toFixed(2).replace('.', ',') + ' s';
+}
+
+$('modoSchermi').addEventListener('change', () => {
+  ox = oy = 0; impostaZoom(1);  // le dimensioni dell'area cambiano: si riparte centrati
+  aggiornaRitardo(); invalida();
+  try { localStorage.setItem('oled-modo-schermi', $('modoSchermi').value); } catch (e) {}
+});
+$('ritardo').addEventListener('input', () => { aggiornaRitardo(); invalida(); });
 
 // ---------- Conversione a 1 bit ----------
 const BAYER = [0,32,8,40,2,34,10,42, 48,16,56,24,50,18,58,26, 12,44,4,36,14,46,6,38, 60,28,52,20,62,30,54,22,
@@ -455,12 +633,26 @@ function invalida() {
   if (sorgenti.length) mostra(indice);
 }
 
-function frame(i) { return cache[i] ??= elabora(sorgenti[i]); }
+function frame(i) { return cache[i] ??= elabora(i); }
 
-function elabora(sorgente) {
+// Frame da mostrare sul secondo schermo: quello che si vede "anticipo" secondi più avanti
+function indiceAnticipato(i) {
+  const t = (inizi[i] + Math.round($('ritardo').value * 1000)) % totaleMs;
+  let lo = 0, hi = inizi.length - 1;
+  while (lo < hi) { const m = (lo + hi + 1) >> 1; if (inizi[m] <= t) lo = m; else hi = m - 1; }
+  return lo;
+}
+
+function elabora(i) {
   const metodo = $('metodo').value, soglia = +$('soglia').value, inverti = $('inverti').checked;
   tctx.fillStyle = '#000'; tctx.fillRect(0, 0, LW, LH);
-  tctx.drawImage(sorgente, ...rettangolo());
+  zone().forEach(([zx, zy, zw, zh], z) => {
+    const r = rettangolo(zw, zh);
+    tctx.save();
+    tctx.beginPath(); tctx.rect(zx, zy, zw, zh); tctx.clip();
+    tctx.drawImage(sorgenti[z === 0 ? i : indiceAnticipato(i)], zx + r[0], zy + r[1], r[2], r[3]);
+    tctx.restore();
+  });
   const rgba = tctx.getImageData(0, 0, LW, LH).data;
 
   const v = new Float32Array(LW * LH);
@@ -504,6 +696,79 @@ function impacchetta(bit) {
 }
 
 ['metodo', 'soglia', 'inverti'].forEach(id => $(id).addEventListener('input', invalida));
+$('soglia').addEventListener('input', () => $('sogliaValore').textContent = $('soglia').value);
+
+// ---------- Rotary encoder ----------
+// Stesso ordine e stessi colori dei modi nel firmware (occhi_disegno.ino)
+const MODI = [
+  { nome: 'GIF dalla libreria', colore: 'rgb(255,0,0)' },
+  { nome: 'Zoom',               colore: 'rgb(255,96,0)' },
+  { nome: 'Posizione',          colore: 'rgb(230,200,0)' },
+  { nome: 'Soglia',             colore: 'rgb(0,200,0)' },
+  { nome: 'Inverti',            colore: 'rgb(0,200,220)' },
+  { nome: 'Conversione',        colore: 'rgb(0,80,255)' },
+  { nome: 'Adattamento',        colore: 'rgb(200,0,255)' },
+];
+document.querySelectorAll('[data-modo]').forEach(el => el.style.setProperty('--c', MODI[+el.dataset.modo].colore));
+
+const PASSO_SPOSTA = 4;      // pixel per scatto
+const PASSO_SOGLIA = 8;
+const PASSO_ZOOM = 1.1;      // fattore per scatto
+let attesaGif = null;
+
+function eventoEncoder(riga) {
+  const m = riga.match(/^E (\d+) (-?\d+)$/);
+  if (!m) return;
+  const modo = +m[1], d = +m[2];
+  evidenziaModo(modo);
+  if (!d) return;
+  const haGif = sorgenti.length > 0;
+  switch (modo) {
+    case 0: scorriLibreria(d); break;
+    case 1: if (haGif) { impostaZoom(zoom * PASSO_ZOOM ** d); invalida(); } break;
+    case 2: if (haGif) { ox += d * PASSO_SPOSTA; invalida(); } break;
+    case 3: impostaControllo('soglia', Math.min(255, Math.max(0, +$('soglia').value + d * PASSO_SOGLIA))); break;
+    case 4: $('inverti').checked = d > 0; $('inverti').dispatchEvent(new Event('input')); break;
+    case 5: ruotaSelect('metodo', d); break;
+    case 6: ruotaSelect('adatta', d); break;
+  }
+}
+
+function evidenziaModo(modo) {
+  const info = MODI[modo];
+  if (!info) return;
+  document.documentElement.style.setProperty('--colore-modo', info.colore);
+  document.querySelectorAll('[data-modo]').forEach(el => el.classList.toggle('encoder-attivo', +el.dataset.modo === modo));
+  const pallino = Object.assign(document.createElement('span'), { className: 'pallino' });
+  $('statoEncoder').replaceChildren(pallino, 'Encoder: ' + info.nome);
+}
+
+function impostaControllo(id, valore) {
+  $(id).value = valore;
+  $(id).dispatchEvent(new Event('input'));
+}
+
+function ruotaSelect(id, d) {
+  const sel = $(id), n = sel.options.length;
+  sel.selectedIndex = ((sel.selectedIndex + d) % n + n) % n;
+  sel.dispatchEvent(new Event('input'));
+  sel.dispatchEvent(new Event('change'));
+}
+
+// Evidenzia subito la GIF scelta, ma la carica solo quando si smette di girare
+function scorriLibreria(d) {
+  const n = libreria.length;
+  if (!n) return;
+  // Se la GIF attuale non è in libreria si parte dalla prima (orario) o dall'ultima (antiorario)
+  const i = libreria.indexOf($('url').value);
+  const base = i >= 0 ? i : d > 0 ? -1 : 0;
+  const url = libreria[((base + d) % n + n) % n];
+  $('url').value = url;
+  mostraLibreria();
+  document.querySelector('.voce.attiva')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  clearTimeout(attesaGif);
+  attesaGif = setTimeout(() => caricaUrl(url, false), 300);
+}
 
 // ---------- Riproduzione ----------
 let indice = 0, prossimoCambio = 0, inPausa = false;
@@ -554,6 +819,8 @@ let salvato = null;
 try { salvato = localStorage.getItem('oled-orientamento'); } catch (e) {}
 if (['0', '90', '180', '270'].includes(salvato)) $('orientamento').value = salvato;
 impostaOrientamento(+$('orientamento').value);
+try { if (localStorage.getItem('oled-modo-schermi') === 'duplica') $('modoSchermi').value = 'duplica'; } catch (e) {}
+aggiornaRitardo();
 ctx.fillStyle = '#0b0d10'; ctx.fillRect(0, 0, LW, LH);
 </script>
 </body>

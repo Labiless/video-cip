@@ -6,8 +6,13 @@
 //     byte 0-1023 = schermo sinistro, 1024-2047 = destro, nel formato del buffer
 //     SSD1306: 8 pagine da 128 byte, ogni byte = 8 pixel in verticale (bit 0 in alto)
 //
-// Rotary encoder: click = cambia colore del LED sulla board, rotazione = luminosità
-//   CLK -> GP4, DT -> GP5, SW -> GP6, + -> 3V3, GND -> GND
+// Invia alla seriale USB:
+//   K            -> frame mostrato, pronto per il successivo
+//   E modo n     -> encoder: n scatti (negativo = antiorario) nella funzione "modo";
+//                   n = 0 quando un click ha cambiato funzione
+//
+// Rotary encoder: click = funzione successiva (il LED cambia colore), rotazione = regola il valore
+//   EC11: A -> GP4, B -> GP5, C (centrale) -> GND; pulsante: un piedino -> GP6, l'altro -> GND
 
 #include <Wire.h>
 #include <U8g2lib.h>
@@ -28,28 +33,28 @@ uint8_t bufferDx[BYTE_SCHERMO];
 // Se rosso e verde risultano scambiati, cambia NEO_GRB in NEO_RGB
 Adafruit_NeoPixel led(1, 16, NEO_GRB + NEO_KHZ800);
 
+// Una funzione dell'encoder per colore, nello stesso ordine della pagina gif_oled.html
 const uint8_t COLORI[][3] = {
-  {255, 0, 0}, {255, 96, 0}, {255, 220, 0}, {0, 255, 0},
-  {0, 255, 255}, {0, 0, 255}, {200, 0, 255}, {255, 255, 255},
+  {255, 0, 0},    // 0 rosso:     cambia GIF dalla libreria
+  {255, 96, 0},   // 1 arancione: zoom
+  {255, 220, 0},  // 2 giallo:    sposta a destra/sinistra
+  {0, 255, 0},    // 3 verde:     soglia
+  {0, 255, 255},  // 4 ciano:     inverti (orario = on, antiorario = off)
+  {0, 0, 255},    // 5 blu:       modalità di conversione
+  {200, 0, 255},  // 6 viola:     modalità di adattamento
 };
-const uint8_t N_COLORI = sizeof(COLORI) / sizeof(COLORI[0]);
-const int8_t LIVELLI = 16;     // gradini di luminosità (0 = spento)
-uint8_t colore = 0;
-int8_t livello = 8;
-bool aggiornaLed = true;
+const uint8_t N_MODI = sizeof(COLORI) / sizeof(COLORI[0]);
+uint8_t modo = 0;
 
 void mostraLed() {
-  // Scala quadratica: l'occhio percepisce meglio i gradini a bassa luminosità
-  uint16_t lum = (uint16_t)livello * livello * 255 / (LIVELLI * LIVELLI);
-  led.setPixelColor(0, COLORI[colore][0] * lum / 255, COLORI[colore][1] * lum / 255,
-                       COLORI[colore][2] * lum / 255);
+  led.setPixelColor(0, COLORI[modo][0], COLORI[modo][1], COLORI[modo][2]);
   led.show();
 }
 
 // ---------- Rotary encoder ----------
 const uint8_t PIN_CLK = 4, PIN_DT = 5, PIN_SW = 6;
-const int8_t PASSI_PER_SCATTO = 4;  // la maggior parte degli encoder (KY-040) fa 4 transizioni per scatto;
-                                    // se ogni scatto cambia di 2 livelli, metti 2
+const int8_t PASSI_PER_SCATTO = 4;  // la maggior parte degli encoder (EC11, KY-040) fa 4 transizioni per scatto;
+                                    // se ogni scatto conta doppio, metti 2
 
 // Letto via interrupt: gli scatti non si perdono anche mentre gli schermi si aggiornano
 volatile int32_t passiEncoder = 0;
@@ -62,17 +67,21 @@ void encoderISR() {
   passiEncoder += TABELLA[statoAB];
 }
 
+// Comunica alla pagina web: "E modo scatti\n" (scatti = 0 quando cambia solo la funzione)
+void inviaEvento(int32_t scatti) {
+  Serial.print('E'); Serial.print(' ');
+  Serial.print(modo); Serial.print(' ');
+  Serial.print(scatti); Serial.print('\n');
+}
+
 void gestisciEncoder() {
   noInterrupts();
   int32_t passi = passiEncoder;
   int32_t scatti = passi / PASSI_PER_SCATTO;
   passiEncoder = passi - scatti * PASSI_PER_SCATTO;  // il resto vale per il prossimo scatto
   interrupts();
-  if (scatti) {
-    // Se girando in senso orario la luminosità scende, scambia i fili CLK e DT
-    livello = constrain(livello + scatti, 0, LIVELLI);
-    aggiornaLed = true;
-  }
+  // Se girando in senso orario i valori scendono, scambia i fili CLK e DT
+  if (scatti) inviaEvento(scatti);
 
   // Pulsante con antirimbalzo: conta il click quando lo stato resta stabile per 30 ms
   static bool premuto = false, ultimaLettura = false;
@@ -81,10 +90,12 @@ void gestisciEncoder() {
   if (lettura != ultimaLettura) { ultimaLettura = lettura; cambiato = millis(); }
   if (lettura != premuto && millis() - cambiato > 30) {
     premuto = lettura;
-    if (premuto) { colore = (colore + 1) % N_COLORI; aggiornaLed = true; }
+    if (premuto) {
+      modo = (modo + 1) % N_MODI;
+      mostraLed();
+      inviaEvento(0);
+    }
   }
-
-  if (aggiornaLed) { mostraLed(); aggiornaLed = false; }
 }
 
 // ---------- Seriale ----------
@@ -144,6 +155,7 @@ void setup() {
   dx.clearBuffer(); dx.sendBuffer();
 
   led.begin();
+  mostraLed();
 
   pinMode(PIN_CLK, INPUT_PULLUP);
   pinMode(PIN_DT, INPUT_PULLUP);
