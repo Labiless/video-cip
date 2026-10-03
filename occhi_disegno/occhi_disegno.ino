@@ -42,12 +42,18 @@ const uint8_t COLORI[][3] = {
   {0, 255, 255},  // 4 ciano:     inverti (orario = on, antiorario = off)
   {0, 0, 255},    // 5 blu:       modalità di conversione
   {200, 0, 255},  // 6 viola:     modalità di adattamento
+  {255, 255, 255},// 7 bianco:    contenuto (orario = duplicata, antiorario = schermo unico)
+  {255, 30, 120}, // 8 rosa:      anticipo del secondo schermo
+  {150, 255, 0},  // 9 lime:      velocità di riproduzione
 };
 const uint8_t N_MODI = sizeof(COLORI) / sizeof(COLORI[0]);
 uint8_t modo = 0;
 
+const uint8_t LUMINOSITA_LED = 10;  // percentuale (100 = massimo)
+
 void mostraLed() {
-  led.setPixelColor(0, COLORI[modo][0], COLORI[modo][1], COLORI[modo][2]);
+  led.setPixelColor(0, COLORI[modo][0] * LUMINOSITA_LED / 100, COLORI[modo][1] * LUMINOSITA_LED / 100,
+                       COLORI[modo][2] * LUMINOSITA_LED / 100);
   led.show();
 }
 

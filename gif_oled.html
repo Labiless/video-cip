@@ -59,6 +59,7 @@
           padding: 7px 8px; margin: 0 -8px; border-radius: 8px; transition: background .15s, box-shadow .15s; }
   .riga > label, .riga > .nome { color: var(--fg); }
   .riga.disattiva { opacity: .45; }
+  .riga.velocita { margin-top: 10px; max-width: 420px; }
   .controllo { display: flex; gap: 8px; align-items: center; min-width: 0; }
   .valore { min-width: 4.5ch; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; }
   .suggerimento { color: var(--muted); font-size: 13px; flex: 1; }
@@ -234,16 +235,16 @@
             <option value="180">Orizzontale capovolto (256 × 64)</option>
           </select>
         </div>
-        <div class="riga">
-          <span></span>
+        <div class="riga" data-modo="7">
+          <span class="dot"></span>
           <label for="modoSchermi">Contenuto</label>
           <select id="modoSchermi">
             <option value="unico">Schermo unico</option>
             <option value="duplica">Duplicata su ogni schermo</option>
           </select>
         </div>
-        <div class="riga" id="rigaRitardo">
-          <span></span>
+        <div class="riga" id="rigaRitardo" data-modo="8">
+          <span class="dot"></span>
           <label for="ritardo">Anticipo 2°</label>
           <div class="controllo">
             <input type="range" id="ritardo" min="0" max="1" step="0.05" value="0">
@@ -264,6 +265,14 @@
         <div class="sotto">
           <button id="play" disabled>Pausa</button>
           <span class="info" id="info">Nessuna GIF caricata</span>
+        </div>
+        <div class="riga velocita" data-modo="9">
+          <span class="dot"></span>
+          <label for="velocita">Velocità</label>
+          <div class="controllo">
+            <input type="range" id="velocita" min="0" max="10" step="1" value="4">
+            <span class="valore" id="velocitaValore">1×</span>
+          </div>
         </div>
         <div class="stato" id="statoGif"></div>
         <p class="aiuto">Trascina l'anteprima per spostare la GIF, usa la rotellina per lo zoom.</p>
@@ -708,12 +717,16 @@ const MODI = [
   { nome: 'Inverti',            colore: 'rgb(0,200,220)' },
   { nome: 'Conversione',        colore: 'rgb(0,80,255)' },
   { nome: 'Adattamento',        colore: 'rgb(200,0,255)' },
+  { nome: 'Contenuto',          colore: 'rgb(235,235,235)' },
+  { nome: 'Anticipo 2° schermo', colore: 'rgb(255,60,150)' },
+  { nome: 'Velocità',           colore: 'rgb(150,255,0)' },
 ];
 document.querySelectorAll('[data-modo]').forEach(el => el.style.setProperty('--c', MODI[+el.dataset.modo].colore));
 
 const PASSO_SPOSTA = 4;      // pixel per scatto
 const PASSO_SOGLIA = 8;
 const PASSO_ZOOM = 1.1;      // fattore per scatto
+const PASSO_ANTICIPO = 0.1;  // secondi per scatto
 let attesaGif = null;
 
 function eventoEncoder(riga) {
@@ -731,6 +744,15 @@ function eventoEncoder(riga) {
     case 4: $('inverti').checked = d > 0; $('inverti').dispatchEvent(new Event('input')); break;
     case 5: ruotaSelect('metodo', d); break;
     case 6: ruotaSelect('adatta', d); break;
+    case 7: impostaModoSchermi(d > 0 ? 'duplica' : 'unico'); break;
+    case 9: impostaControllo('velocita', Math.min(VELOCITA.length - 1, Math.max(0, +$('velocita').value + d))); break;
+    case 8: {
+      // Regolare l'anticipo ha senso solo con la GIF duplicata: la attiva se serve
+      impostaModoSchermi('duplica');
+      const max = +$('ritardo').max, v = Math.min(max, Math.max(0, +$('ritardo').value + d * PASSO_ANTICIPO));
+      impostaControllo('ritardo', v.toFixed(2));
+      break;
+    }
   }
 }
 
@@ -741,6 +763,13 @@ function evidenziaModo(modo) {
   document.querySelectorAll('[data-modo]').forEach(el => el.classList.toggle('encoder-attivo', +el.dataset.modo === modo));
   const pallino = Object.assign(document.createElement('span'), { className: 'pallino' });
   $('statoEncoder').replaceChildren(pallino, 'Encoder: ' + info.nome);
+}
+
+// Orario = duplicata, antiorario = schermo unico
+function impostaModoSchermi(valore) {
+  if ($('modoSchermi').value === valore) return;
+  $('modoSchermi').value = valore;
+  $('modoSchermi').dispatchEvent(new Event('change'));
 }
 
 function impostaControllo(id, valore) {
@@ -773,6 +802,18 @@ function scorriLibreria(d) {
 // ---------- Riproduzione ----------
 let indice = 0, prossimoCambio = 0, inPausa = false;
 
+// Velocità di riproduzione: lo slider sceglie uno di questi moltiplicatori
+const VELOCITA = [0.1, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4, 6];
+const velocita = () => VELOCITA[+$('velocita').value];
+let velocitaPrima = velocita();
+$('velocita').addEventListener('input', () => {
+  // Riscala l'attesa del frame in corso, così il cambio di velocità si sente subito
+  const ora = performance.now();
+  if (prossimoCambio > ora) prossimoCambio = ora + (prossimoCambio - ora) * velocitaPrima / velocita();
+  velocitaPrima = velocita();
+  $('velocitaValore').textContent = String(velocita()).replace('.', ',') + '×';
+});
+
 function mostra(i) {
   const { bit } = frame(i), d = img.data;
   for (let p = 0; p < LW * LH; p++) {
@@ -785,7 +826,7 @@ function mostra(i) {
 }
 
 function avviaRiproduzione() {
-  indice = 0; prossimoCambio = performance.now() + durate[0];
+  indice = 0; prossimoCambio = performance.now() + durate[0] / velocita();
   inPausa = false; $('play').disabled = false; $('play').textContent = 'Pausa';
   invalida();
 }
@@ -793,7 +834,7 @@ function avviaRiproduzione() {
 $('play').onclick = () => {
   inPausa = !inPausa;
   $('play').textContent = inPausa ? 'Riproduci' : 'Pausa';
-  if (!inPausa) prossimoCambio = performance.now() + durate[indice];
+  if (!inPausa) prossimoCambio = performance.now() + durate[indice] / velocita();
 };
 
 function ciclo(ora) {
@@ -802,7 +843,7 @@ function ciclo(ora) {
     if (ora - prossimoCambio > 1000) prossimoCambio = ora;
     while (ora >= prossimoCambio) {
       indice = (indice + 1) % sorgenti.length;
-      prossimoCambio += durate[indice];
+      prossimoCambio += durate[indice] / velocita();
     }
     mostra(indice);
   }
