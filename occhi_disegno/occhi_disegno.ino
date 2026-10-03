@@ -2,6 +2,8 @@
 // Riceve dalla seriale USB:
 //   P x y   -> accende il pixel (x: 0-255, y: 0-63)
 //   C       -> cancella tutto
+//   M n     -> seleziona la funzione n dell'encoder (come dopo n click)
+//   Q       -> chiede la funzione attiva: risponde con "E modo 0"
 //   F + 2048 byte binari -> frame intero; risponde 'K' quando l'ha mostrato
 //     byte 0-1023 = schermo sinistro, 1024-2047 = destro, nel formato del buffer
 //     SSD1306: 8 pagine da 128 byte, ogni byte = 8 pixel in verticale (bit 0 in alto)
@@ -34,17 +36,18 @@ uint8_t bufferDx[BYTE_SCHERMO];
 Adafruit_NeoPixel led(1, 16, NEO_GRB + NEO_KHZ800);
 
 // Una funzione dell'encoder per colore, nello stesso ordine della pagina gif_oled.html
+// (la libreria, poi i riquadri della pagina da in alto a sinistra a in basso a destra)
 const uint8_t COLORI[][3] = {
-  {255, 0, 0},    // 0 rosso:     cambia GIF dalla libreria
-  {255, 96, 0},   // 1 arancione: zoom
-  {255, 220, 0},  // 2 giallo:    sposta a destra/sinistra
-  {0, 255, 0},    // 3 verde:     soglia
-  {0, 255, 255},  // 4 ciano:     inverti (orario = on, antiorario = off)
-  {0, 0, 255},    // 5 blu:       modalità di conversione
-  {200, 0, 255},  // 6 viola:     modalità di adattamento
-  {255, 255, 255},// 7 bianco:    contenuto (orario = duplicata, antiorario = schermo unico)
-  {255, 30, 120}, // 8 rosa:      anticipo del secondo schermo
-  {150, 255, 0},  // 9 lime:      velocità di riproduzione
+  {255, 0, 0},     // 0 rosso:     cambia GIF dalla libreria
+  {130, 0, 255},   // 1 viola:     modalità di adattamento
+  {255, 96, 0},    // 2 arancione: zoom
+  {255, 220, 0},   // 3 giallo:    sposta a destra/sinistra
+  {0, 60, 255},    // 4 blu:       modalità di conversione
+  {0, 255, 0},     // 5 verde:     soglia
+  {0, 255, 255},   // 6 ciano:     inverti (orario = on, antiorario = off)
+  {255, 255, 255}, // 7 bianco:    contenuto (orario = duplicata, antiorario = schermo unico)
+  {255, 0, 200},   // 8 magenta:   anticipo del secondo schermo
+  {150, 255, 0},   // 9 lime:      velocità di riproduzione
 };
 const uint8_t N_MODI = sizeof(COLORI) / sizeof(COLORI[0]);
 uint8_t modo = 0;
@@ -125,6 +128,16 @@ void gestisci(char *cmd) {
   } else if (cmd[0] == 'C') {
     sx.clearBuffer(); dx.clearBuffer();
     aggiornaSx = aggiornaDx = true;
+  } else if (cmd[0] == 'M') {
+    // La pagina ha selezionato una funzione cliccando il suo riquadro
+    int m;
+    if (sscanf(cmd + 1, "%d", &m) == 1 && m >= 0 && m < N_MODI) {
+      modo = m;
+      mostraLed();
+      inviaEvento(0);
+    }
+  } else if (cmd[0] == 'Q') {
+    inviaEvento(0);  // la pagina chiede quale funzione è attiva
   }
 }
 

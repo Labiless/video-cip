@@ -16,25 +16,7 @@
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--fg);
          font: 14px/1.45 -apple-system, system-ui, sans-serif; padding: 20px 16px 32px; }
-  main { max-width: 1280px; margin: 0 auto; }
-  header { margin-bottom: 18px; }
-  h1 { font-size: 20px; font-weight: 650; margin: 0 0 2px; }
-  header p { margin: 0; color: var(--muted); }
-
-  /* Due colonne: controlli a sinistra, anteprima fissa a destra */
-  .layout { display: grid; grid-template-columns: minmax(320px, 400px) minmax(0, 1fr); gap: 20px;
-            align-items: start; }
-  .controlli { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
-  .anteprima { position: sticky; top: 20px; }
-  @media (max-width: 860px) {
-    .layout { grid-template-columns: minmax(0, 1fr); }
-    .anteprima { position: static; order: -1; }
-  }
-
-  .pannello { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
-  .pannello h2 { font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
-                 color: var(--muted); margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
-  .pannello h2 .spazio { flex: 1; }
+  main { max-width: 1280px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
 
   button, input, select { font: inherit; color: var(--fg); }
   button { padding: 7px 12px; border-radius: 8px; border: 1px solid var(--line);
@@ -42,49 +24,86 @@
   button:hover:not(:disabled) { border-color: var(--muted); }
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   button:disabled { opacity: .4; cursor: default; }
-  button.piccolo { padding: 2px 9px; font-size: 12px; text-transform: none; letter-spacing: 0; }
-  input[type=url] { flex: 1; min-width: 0; padding: 7px 10px; border-radius: 8px;
-                    border: 1px solid var(--line); background: var(--bg); }
-  select { width: 100%; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); }
-  input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
-  .fila { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  .fila + .fila { margin-top: 8px; }
-
+  button.piccolo { padding: 2px 9px; font-size: 12px; }
+  select { padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); }
+  input[type=range] { width: 100%; margin: 0; }
   .stato { color: var(--muted); font-size: 13px; }
   .stato.ok { color: var(--ok); } .stato.err { color: var(--danger); }
   .stato:empty { display: none; }
+  .pannello { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px; }
 
-  /* Righe delle funzioni: pallino col colore del LED, nome, controllo */
-  .riga { display: grid; grid-template-columns: 12px 92px minmax(0, 1fr); gap: 10px; align-items: center;
-          padding: 7px 8px; margin: 0 -8px; border-radius: 8px; transition: background .15s, box-shadow .15s; }
-  .riga > label, .riga > .nome { color: var(--fg); }
-  .riga.disattiva { opacity: .45; }
-  .riga.velocita { margin-top: 10px; max-width: 420px; }
-  .controllo { display: flex; gap: 8px; align-items: center; min-width: 0; }
-  .valore { min-width: 4.5ch; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; }
-  .suggerimento { color: var(--muted); font-size: 13px; flex: 1; }
-  .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--c);
-         box-shadow: 0 0 0 1px rgba(0,0,0,.15) inset; }
-  .legenda { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 12px; margin-top: 10px; }
-  .legenda .dot { width: 8px; height: 8px; }
+  /* ---- Barra in alto: link della GIF e connessione ---- */
+  .barra { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .barra form { display: flex; gap: 8px; flex: 1 1 420px; min-width: 0; }
+  .barra input[type=url] { flex: 1; min-width: 0; padding: 9px 12px; border-radius: 10px;
+                           border: 1px solid var(--line); background: var(--panel); font-size: 15px; }
+  .barra .spazio { flex: 1; }
+  .barra .board { display: flex; gap: 10px; align-items: center; margin-left: auto; }
+  #statoGif { width: 100%; }
 
-  /* Funzione attiva dell'encoder */
-  [data-modo].encoder-attivo { background: color-mix(in srgb, var(--c) 12%, transparent);
-                               box-shadow: 0 0 0 2px var(--c) inset; }
-  .pannello[data-modo].encoder-attivo { background: color-mix(in srgb, var(--c) 6%, var(--panel)); }
-  .riga.encoder-attivo .dot { box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 35%, transparent); }
+  /* ---- Libreria: striscia orizzontale ---- */
+  .sezione-libreria { transition: background .2s, border-color .2s; }
+  .sezione-libreria .testa { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .sezione-libreria h2 { font-size: 12px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase;
+                         margin: 0; color: var(--muted); }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--c); flex: none; }
+  .sezione-libreria.attiva { background: var(--c); border-color: var(--c); }
+  .sezione-libreria.attiva h2 { color: var(--t); }
+  .sezione-libreria.attiva .dot { background: var(--t); }
+  .sezione-libreria.attiva #libreriaVuota { color: var(--t); }
+  .libreria { list-style: none; margin: 0; padding: 4px 2px; display: flex; gap: 10px; overflow-x: auto; }
+  #libreriaVuota { margin: 0; color: var(--muted); font-size: 13px; }
+  .voce { position: relative; flex: none; width: 84px; }
+  .miniatura { display: block; width: 100%; aspect-ratio: 1; padding: 0; overflow: hidden;
+               background: var(--screen); border: 3px solid transparent; border-radius: 10px; }
+  .miniatura:hover { border-color: var(--muted); }
+  .voce.attiva .miniatura { border-color: var(--accent); }
+  .sezione-libreria.attiva .voce.attiva .miniatura { border-color: var(--t); }
+  .miniatura img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .togli { position: absolute; top: 4px; right: 4px; width: 20px; height: 20px; padding: 0;
+           border-radius: 50%; border: none; background: rgba(0,0,0,.65); color: #fff;
+           font-size: 13px; line-height: 1; opacity: 0; }
+  .voce:hover .togli, .togli:focus-visible { opacity: 1; }
+  @media (hover: none) { .togli { opacity: 1; } }
+
+  /* ---- Sotto: funzioni a sinistra, anteprima a destra ---- */
+  .layout { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(300px, 1fr); gap: 16px; align-items: start; }
+  .anteprima { position: sticky; top: 16px; }
+  @media (max-width: 900px) {
+    .layout { grid-template-columns: minmax(0, 1fr); }
+    .anteprima { position: static; order: -1; }
+  }
+
+  /* Riquadri delle funzioni dell'encoder: sfondo del colore del LED */
+  .funzioni { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  @media (max-width: 560px) { .funzioni { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .tile { background: var(--c); color: var(--t); border-radius: 14px; padding: 14px; min-height: 132px;
+          display: flex; flex-direction: column; justify-content: space-between; gap: 12px;
+          opacity: .42; cursor: pointer; transition: opacity .18s, box-shadow .18s, transform .18s; }
+  .tile:hover { opacity: .7; }
+  .tile.attiva { opacity: 1; box-shadow: 0 0 0 3px var(--bg), 0 0 0 5px var(--c); }
+  .tile-testa { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .tile-nome { font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+  .tile-valore { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1; }
+  .tile-nota { font-size: 12px; opacity: .8; }
+  .tile-nota:empty { display: none; }
+  .tile input[type=range] { accent-color: var(--t); }
+  .tile select { width: 100%; color: var(--t); background: color-mix(in srgb, var(--t) 12%, transparent);
+                 border: 1px solid color-mix(in srgb, var(--t) 35%, transparent); }
+  .tile select option { color: #111; background: #fff; }
+  .tile button { color: var(--t); border-color: color-mix(in srgb, var(--t) 45%, transparent); }
+  .tile .fila { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+  .tile.disattiva input { opacity: .5; }
 
   /* Interruttore per "Inverti" */
-  .interruttore { appearance: none; width: 36px; height: 20px; border-radius: 10px; margin: 0;
-                  background: var(--line); position: relative; cursor: pointer; transition: background .15s; }
-  .interruttore::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
-                         border-radius: 50%; background: #fff; transition: transform .15s;
-                         box-shadow: 0 1px 2px rgba(0,0,0,.3); }
-  .interruttore:checked { background: var(--accent); }
-  .interruttore:checked::after { transform: translateX(16px); }
+  .interruttore { appearance: none; width: 44px; height: 24px; border-radius: 12px; margin: 0; cursor: pointer;
+                  background: color-mix(in srgb, var(--t) 25%, transparent); position: relative; transition: background .15s; }
+  .interruttore::after { content: ''; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px;
+                         border-radius: 50%; background: var(--t); transition: transform .15s; }
+  .interruttore:checked { background: color-mix(in srgb, var(--t) 60%, transparent); }
+  .interruttore:checked::after { transform: translateX(20px); background: var(--c); box-shadow: 0 0 0 2px var(--t) inset; }
 
   /* Anteprima degli schermi */
-  .anteprima .pannello { padding: 16px; }
   .schermi { position: relative; background: var(--screen); border-radius: 10px; padding: 10px;
              outline: 2px dashed transparent; outline-offset: 4px; margin: 0 auto; }
   .schermi.trascina { outline-color: var(--accent); }
@@ -92,192 +111,125 @@
   canvas.spostabile { cursor: grab; } canvas.spostabile:active { cursor: grabbing; }
   .divisore { position: absolute; top: 10px; bottom: 10px; left: 50%; width: 2px;
               transform: translateX(-1px); background: #2a2e35; pointer-events: none; }
-  /* Schermi ruotati: colonna verticale 64 x 256 */
   .schermi.verticale { width: fit-content; }
-  .schermi.verticale canvas { width: auto; height: min(68vh, 620px); aspect-ratio: 1 / 4; }
+  .schermi.verticale canvas { width: auto; height: min(60vh, 560px); aspect-ratio: 1 / 4; }
   .schermi.verticale .divisore { top: 50%; bottom: auto; left: 10px; right: 10px; width: auto; height: 2px;
                                  transform: translateY(-1px); }
   .etichette { display: flex; justify-content: space-around; color: var(--muted);
                font-size: 12px; margin: 8px 0 12px; text-align: center; }
-  .sotto { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .sotto { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .sotto select { flex: 1; min-width: 0; }
+  .sotto + .sotto { margin-top: 10px; }
   .info { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .aiuto { margin: 12px 0 0; color: var(--muted); font-size: 12px; }
   .avviso { margin-top: 12px; font-size: 13px; color: var(--danger); }
   .avviso:empty { display: none; }
-
-  .pallino { display: inline-block; width: 10px; height: 10px; border-radius: 50%;
-             background: var(--colore-modo); margin-right: 6px; vertical-align: -1px; }
-
-  /* Libreria */
-  .libreria { list-style: none; margin: 0; padding: 2px; display: grid; gap: 8px;
-              grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); max-height: 260px; overflow-y: auto; }
-  #libreriaVuota { margin: 0; color: var(--muted); font-size: 13px; }
-  .voce { position: relative; }
-  .miniatura { display: block; width: 100%; aspect-ratio: 1; padding: 0; overflow: hidden;
-               background: var(--screen); border: 2px solid transparent; border-radius: 8px; }
-  .miniatura:hover { border-color: var(--muted); }
-  .voce.attiva .miniatura { border-color: var(--accent); }
-  .miniatura img { width: 100%; height: 100%; object-fit: cover; display: block; }
-  .togli { position: absolute; top: 3px; right: 3px; width: 20px; height: 20px; padding: 0;
-           border-radius: 50%; border: none; background: rgba(0,0,0,.65); color: #fff;
-           font-size: 13px; line-height: 1; opacity: 0; }
-  .voce:hover .togli, .togli:focus-visible { opacity: 1; }
-  @media (hover: none) { .togli { opacity: 1; } }
 </style>
 </head>
 <body>
 <main>
-  <header>
-    <h1>GIF sugli OLED</h1>
-    <p>Riproduci una GIF sui due OLED come se fossero un unico schermo, e regolala dalla pagina o con l'encoder.</p>
-  </header>
+  <!-- Link della GIF e connessione alla board -->
+  <div class="barra">
+    <form id="formUrl">
+      <input type="url" id="url" placeholder="Incolla il link diretto a una GIF" required>
+      <button type="submit">Carica</button>
+      <button type="button" id="scegliFile">Da file…</button>
+      <input type="file" id="file" accept="image/gif,image/webp,image/png" hidden>
+    </form>
+    <div class="board">
+      <span id="statoBoard" class="stato">Non connessa</span>
+      <button id="connetti" class="primary">Connetti board</button>
+    </div>
+    <div class="stato" id="statoGif"></div>
+  </div>
+
+  <!-- Libreria: è anche la prima funzione dell'encoder -->
+  <section class="pannello sezione-libreria" data-funzione="libreria">
+    <div class="testa">
+      <span class="dot"></span><h2>Libreria</h2>
+      <span class="spazio" style="flex:1"></span>
+      <button id="svuotaLibreria" class="piccolo">Svuota</button>
+    </div>
+    <p id="libreriaVuota">Le GIF caricate da un link compaiono qui: cliccane una per riprodurla.</p>
+    <ul class="libreria" id="libreria"></ul>
+  </section>
 
   <div class="layout">
-    <div class="controlli">
-
-      <section class="pannello">
-        <h2>Board</h2>
-        <div class="fila">
-          <button id="connetti" class="primary">Connetti board</button>
-          <span id="statoBoard" class="stato">Non connessa</span>
-        </div>
-        <div class="fila"><span id="statoEncoder" class="stato"></span></div>
-      </section>
-
-      <section class="pannello">
-        <h2>GIF</h2>
-        <form class="fila" id="formUrl">
-          <input type="url" id="url" placeholder="Link diretto a una GIF" required>
-          <button type="submit">Carica</button>
-        </form>
-        <div class="fila">
-          <button type="button" id="scegliFile">Da file…</button>
-          <span class="stato">oppure trascinala sull'anteprima</span>
-          <input type="file" id="file" accept="image/gif,image/webp,image/png" hidden>
-        </div>
-      </section>
-
-      <section class="pannello" data-modo="0">
-        <h2><span class="dot" title="LED rosso: l'encoder scorre la libreria"></span> Libreria
-          <span class="spazio"></span>
-          <button id="svuotaLibreria" class="piccolo">Svuota</button>
-        </h2>
-        <p id="libreriaVuota">Le GIF caricate da un link compaiono qui: cliccane una per riprodurla.</p>
-        <ul class="libreria" id="libreria"></ul>
-      </section>
-
-      <section class="pannello">
-        <h2>Inquadratura</h2>
-        <div class="riga" data-modo="6">
-          <span class="dot"></span>
-          <label for="adatta">Adattamento</label>
-          <select id="adatta">
-            <option value="riempi">Riempi (ritaglia)</option>
-            <option value="contieni">Contieni (bande nere)</option>
-            <option value="stira">Stira</option>
-          </select>
-        </div>
-        <div class="riga" data-modo="1">
-          <span class="dot"></span>
-          <label for="zoom">Zoom</label>
-          <div class="controllo">
-            <input type="range" id="zoom" min="10" max="800" value="100">
-            <span class="valore" id="zoomValore">100%</span>
-          </div>
-        </div>
-        <div class="riga" data-modo="2">
-          <span class="dot"></span>
-          <span class="nome">Posizione</span>
-          <div class="controllo">
-            <span class="suggerimento">Trascina l'anteprima</span>
-            <button id="centra" class="piccolo">Centra</button>
-          </div>
-        </div>
-      </section>
-
-      <section class="pannello">
-        <h2>Bianco e nero</h2>
-        <div class="riga" data-modo="5">
-          <span class="dot"></span>
-          <label for="metodo">Conversione</label>
-          <select id="metodo">
-            <option value="bayer">Retino (Bayer)</option>
-            <option value="fs">Diffusione (Floyd–Steinberg)</option>
-            <option value="soglia">Soglia netta</option>
-          </select>
-        </div>
-        <div class="riga" data-modo="3">
-          <span class="dot"></span>
-          <label for="soglia">Soglia</label>
-          <div class="controllo">
-            <input type="range" id="soglia" min="0" max="255" value="128">
-            <span class="valore" id="sogliaValore">128</span>
-          </div>
-        </div>
-        <div class="riga" data-modo="4">
-          <span class="dot"></span>
-          <label for="inverti">Inverti</label>
-          <div class="controllo"><input type="checkbox" id="inverti" class="interruttore"></div>
-        </div>
-        <div class="legenda"><span class="dot" style="--c: var(--muted)"></span>
-          Il pallino è il colore del LED quando l'encoder controlla quella funzione.</div>
-      </section>
-
-      <section class="pannello">
-        <h2>Schermi</h2>
-        <div class="riga">
-          <span></span>
-          <label for="orientamento">Orientamento</label>
-          <select id="orientamento">
-            <option value="0">Orizzontale (256 × 64)</option>
-            <option value="90">Verticale, sinistro in alto (64 × 256)</option>
-            <option value="270">Verticale, destro in alto (64 × 256)</option>
-            <option value="180">Orizzontale capovolto (256 × 64)</option>
-          </select>
-        </div>
-        <div class="riga" data-modo="7">
-          <span class="dot"></span>
-          <label for="modoSchermi">Contenuto</label>
-          <select id="modoSchermi">
-            <option value="unico">Schermo unico</option>
-            <option value="duplica">Duplicata su ogni schermo</option>
-          </select>
-        </div>
-        <div class="riga" id="rigaRitardo" data-modo="8">
-          <span class="dot"></span>
-          <label for="ritardo">Anticipo 2°</label>
-          <div class="controllo">
-            <input type="range" id="ritardo" min="0" max="1" step="0.05" value="0">
-            <span class="valore" id="ritardoValore">0,00 s</span>
-          </div>
-        </div>
-        <p class="aiuto" id="aiutoRitardo">Il secondo schermo (destro, o in basso) è avanti di questo tempo nella GIF.</p>
-      </section>
+    <!-- Funzioni dell'encoder, nell'ordine in cui le seleziona il click -->
+    <div class="funzioni">
+      <div class="tile" data-funzione="adatta">
+        <div class="tile-testa"><span class="tile-nome">Adattamento</span></div>
+        <select id="adatta">
+          <option value="riempi">Riempi (ritaglia)</option>
+          <option value="contieni">Contieni (bande nere)</option>
+          <option value="stira">Stira</option>
+        </select>
+      </div>
+      <div class="tile" data-funzione="zoom">
+        <div class="tile-testa"><span class="tile-nome">Zoom</span><span class="tile-valore" id="zoomValore">100%</span></div>
+        <input type="range" id="zoom" min="10" max="800" value="100">
+      </div>
+      <div class="tile" data-funzione="posizione">
+        <div class="tile-testa"><span class="tile-nome">Posizione</span><span class="tile-valore" id="posizioneValore">0, 0</span></div>
+        <div class="fila"><span class="tile-nota">Trascina l'anteprima</span><button id="centra" class="piccolo">Centra</button></div>
+      </div>
+      <div class="tile" data-funzione="metodo">
+        <div class="tile-testa"><span class="tile-nome">Conversione</span></div>
+        <select id="metodo">
+          <option value="bayer">Retino (Bayer)</option>
+          <option value="fs">Diffusione (Floyd–Steinberg)</option>
+          <option value="soglia">Soglia netta</option>
+        </select>
+      </div>
+      <div class="tile" data-funzione="soglia">
+        <div class="tile-testa"><span class="tile-nome">Soglia</span><span class="tile-valore" id="sogliaValore">128</span></div>
+        <input type="range" id="soglia" min="0" max="255" value="128">
+      </div>
+      <div class="tile" data-funzione="inverti">
+        <div class="tile-testa"><span class="tile-nome">Inverti</span><span class="tile-valore" id="invertiValore">No</span></div>
+        <input type="checkbox" id="inverti" class="interruttore" aria-label="Inverti">
+      </div>
+      <div class="tile" data-funzione="contenuto">
+        <div class="tile-testa"><span class="tile-nome">Contenuto</span></div>
+        <select id="modoSchermi">
+          <option value="unico">Schermo unico</option>
+          <option value="duplica">Duplicata su ogni schermo</option>
+        </select>
+      </div>
+      <div class="tile" data-funzione="anticipo" id="rigaRitardo">
+        <div class="tile-testa"><span class="tile-nome">Anticipo 2°</span><span class="tile-valore" id="ritardoValore">0,00 s</span></div>
+        <span class="tile-nota" id="aiutoRitardo">Solo con la GIF duplicata</span>
+        <input type="range" id="ritardo" min="0" max="1" step="0.05" value="0">
+      </div>
+      <div class="tile" data-funzione="velocita">
+        <div class="tile-testa"><span class="tile-nome">Velocità</span><span class="tile-valore" id="velocitaValore">1×</span></div>
+        <input type="range" id="velocita" min="0" max="10" step="1" value="4">
+      </div>
     </div>
 
-    <aside class="anteprima">
-      <div class="pannello">
-        <div class="schermi" id="schermi">
-          <canvas id="tela" width="256" height="64"></canvas>
-          <div class="divisore"></div>
-        </div>
-        <div class="etichette" id="etichette"></div>
-        <div class="sotto">
-          <button id="play" disabled>Pausa</button>
-          <span class="info" id="info">Nessuna GIF caricata</span>
-        </div>
-        <div class="riga velocita" data-modo="9">
-          <span class="dot"></span>
-          <label for="velocita">Velocità</label>
-          <div class="controllo">
-            <input type="range" id="velocita" min="0" max="10" step="1" value="4">
-            <span class="valore" id="velocitaValore">1×</span>
-          </div>
-        </div>
-        <div class="stato" id="statoGif"></div>
-        <p class="aiuto">Trascina l'anteprima per spostare la GIF, usa la rotellina per lo zoom.</p>
-        <div class="avviso" id="avviso"></div>
+    <!-- Anteprima dei due schermi -->
+    <aside class="anteprima pannello">
+      <div class="schermi" id="schermi">
+        <canvas id="tela" width="256" height="64"></canvas>
+        <div class="divisore"></div>
       </div>
+      <div class="etichette" id="etichette"></div>
+      <div class="sotto">
+        <button id="play" disabled>Pausa</button>
+        <span class="info" id="info">Nessuna GIF caricata</span>
+      </div>
+      <div class="sotto">
+        <label for="orientamento" class="info">Orientamento</label>
+        <select id="orientamento">
+          <option value="0">Orizzontale (256 × 64)</option>
+          <option value="90">Verticale, sinistro in alto (64 × 256)</option>
+          <option value="270">Verticale, destro in alto (64 × 256)</option>
+          <option value="180">Orizzontale capovolto (256 × 64)</option>
+        </select>
+      </div>
+      <p class="aiuto">Trascina l'anteprima per spostare la GIF, rotellina per lo zoom.
+        Clicca un riquadro per selezionare quella funzione anche sull'encoder.</p>
+      <div class="avviso" id="avviso"></div>
     </aside>
   </div>
 </main>
@@ -344,6 +296,7 @@ $('connetti').onclick = async () => {
     setStato($('statoBoard'), 'Connessa', 'ok');
     $('connetti').disabled = true;
     leggiRisposte();
+    inviaTesto('Q\n');  // chiede alla board quale funzione è attiva
   } catch (e) {
     setStato($('statoBoard'), 'Connessione non riuscita: ' + e.message, 'err');
   }
@@ -618,7 +571,7 @@ function aggiornaRitardo() {
   const duplica = $('modoSchermi').value === 'duplica';
   $('ritardo').disabled = !duplica;
   $('rigaRitardo').classList.toggle('disattiva', !duplica);
-  $('aiutoRitardo').hidden = !duplica;
+  $('aiutoRitardo').hidden = duplica;
   $('ritardoValore').textContent = (+$('ritardo').value).toFixed(2).replace('.', ',') + ' s';
 }
 
@@ -638,6 +591,7 @@ const tctx = tmp.getContext('2d', { willReadFrequently: true });
 // Le impostazioni sono cambiate: i frame verranno ricalcolati quando servono
 function invalida() {
   cache = [];
+  $('posizioneValore').textContent = `${Math.round(ox)}, ${Math.round(oy)}`;
   inviato = -1;  // forza il reinvio con le nuove impostazioni
   if (sorgenti.length) mostra(indice);
 }
@@ -706,64 +660,87 @@ function impacchetta(bit) {
 
 ['metodo', 'soglia', 'inverti'].forEach(id => $(id).addEventListener('input', invalida));
 $('soglia').addEventListener('input', () => $('sogliaValore').textContent = $('soglia').value);
+$('inverti').addEventListener('input', () => $('invertiValore').textContent = $('inverti').checked ? 'Sì' : 'No');
 
 // ---------- Rotary encoder ----------
-// Stesso ordine e stessi colori dei modi nel firmware (occhi_disegno.ino)
+// Stesso ordine dei modi nel firmware (occhi_disegno.ino): il click li scorre in quest'ordine,
+// cioè la libreria e poi i riquadri da in alto a sinistra a in basso a destra
 const MODI = [
-  { nome: 'GIF dalla libreria', colore: 'rgb(255,0,0)' },
-  { nome: 'Zoom',               colore: 'rgb(255,96,0)' },
-  { nome: 'Posizione',          colore: 'rgb(230,200,0)' },
-  { nome: 'Soglia',             colore: 'rgb(0,200,0)' },
-  { nome: 'Inverti',            colore: 'rgb(0,200,220)' },
-  { nome: 'Conversione',        colore: 'rgb(0,80,255)' },
-  { nome: 'Adattamento',        colore: 'rgb(200,0,255)' },
-  { nome: 'Contenuto',          colore: 'rgb(235,235,235)' },
-  { nome: 'Anticipo 2° schermo', colore: 'rgb(255,60,150)' },
-  { nome: 'Velocità',           colore: 'rgb(150,255,0)' },
+  { id: 'libreria',  nome: 'Libreria',    colore: '#ea3a26' },
+  { id: 'adatta',    nome: 'Adattamento', colore: '#7a1cf5' },
+  { id: 'zoom',      nome: 'Zoom',        colore: '#ee7932' },
+  { id: 'posizione', nome: 'Posizione',   colore: '#fcee50' },
+  { id: 'metodo',    nome: 'Conversione', colore: '#4394f8' },
+  { id: 'soglia',    nome: 'Soglia',      colore: '#74ff6b' },
+  { id: 'inverti',   nome: 'Inverti',     colore: '#62d5fb' },
+  { id: 'contenuto', nome: 'Contenuto',   colore: '#f2f2f2' },
+  { id: 'anticipo',  nome: 'Anticipo 2°', colore: '#ec32e6' },
+  { id: 'velocita',  nome: 'Velocità',    colore: '#c2ff3a' },
 ];
-document.querySelectorAll('[data-modo]').forEach(el => el.style.setProperty('--c', MODI[+el.dataset.modo].colore));
+
+// Testo scuro sui colori chiari, bianco su quelli scuri
+function coloreTesto(hex) {
+  const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
+  return (r * 299 + g * 587 + b * 114) / 1000 > 150 ? '#141414' : '#ffffff';
+}
+const elementiModo = MODI.map(m => document.querySelector(`[data-funzione="${m.id}"]`));
+elementiModo.forEach((el, n) => {
+  el.style.setProperty('--c', MODI[n].colore);
+  el.style.setProperty('--t', coloreTesto(MODI[n].colore));
+  // Cliccare un riquadro lo seleziona, anche sulla board
+  if (el.classList.contains('tile')) el.addEventListener('pointerdown', () => selezionaDaPagina(n));
+});
 
 const PASSO_SPOSTA = 4;      // pixel per scatto
 const PASSO_SOGLIA = 8;
 const PASSO_ZOOM = 1.1;      // fattore per scatto
 const PASSO_ANTICIPO = 0.1;  // secondi per scatto
-let attesaGif = null;
+let attesaGif = null, modoAttivo = 0;
 
 function eventoEncoder(riga) {
   const m = riga.match(/^E (\d+) (-?\d+)$/);
   if (!m) return;
   const modo = +m[1], d = +m[2];
   evidenziaModo(modo);
-  if (!d) return;
+  if (!d || !MODI[modo]) return;
   const haGif = sorgenti.length > 0;
-  switch (modo) {
-    case 0: scorriLibreria(d); break;
-    case 1: if (haGif) { impostaZoom(zoom * PASSO_ZOOM ** d); invalida(); } break;
-    case 2: if (haGif) { ox += d * PASSO_SPOSTA; invalida(); } break;
-    case 3: impostaControllo('soglia', Math.min(255, Math.max(0, +$('soglia').value + d * PASSO_SOGLIA))); break;
-    case 4: $('inverti').checked = d > 0; $('inverti').dispatchEvent(new Event('input')); break;
-    case 5: ruotaSelect('metodo', d); break;
-    case 6: ruotaSelect('adatta', d); break;
-    case 7: impostaModoSchermi(d > 0 ? 'duplica' : 'unico'); break;
-    case 9: impostaControllo('velocita', Math.min(VELOCITA.length - 1, Math.max(0, +$('velocita').value + d))); break;
-    case 8: {
+  switch (MODI[modo].id) {
+    case 'libreria':  scorriLibreria(d); break;
+    case 'adatta':    ruotaSelect('adatta', d); break;
+    case 'zoom':      if (haGif) { impostaZoom(zoom * PASSO_ZOOM ** d); invalida(); } break;
+    case 'posizione': if (haGif) { ox += d * PASSO_SPOSTA; invalida(); } break;
+    case 'metodo':    ruotaSelect('metodo', d); break;
+    case 'soglia':    impostaControllo('soglia', Math.min(255, Math.max(0, +$('soglia').value + d * PASSO_SOGLIA))); break;
+    case 'inverti':   $('inverti').checked = d > 0; $('inverti').dispatchEvent(new Event('input')); break;
+    case 'contenuto': impostaModoSchermi(d > 0 ? 'duplica' : 'unico'); break;
+    case 'anticipo': {
       // Regolare l'anticipo ha senso solo con la GIF duplicata: la attiva se serve
       impostaModoSchermi('duplica');
       const max = +$('ritardo').max, v = Math.min(max, Math.max(0, +$('ritardo').value + d * PASSO_ANTICIPO));
       impostaControllo('ritardo', v.toFixed(2));
       break;
     }
+    case 'velocita':  impostaControllo('velocita', Math.min(VELOCITA.length - 1, Math.max(0, +$('velocita').value + d))); break;
   }
 }
 
 function evidenziaModo(modo) {
-  const info = MODI[modo];
-  if (!info) return;
-  document.documentElement.style.setProperty('--colore-modo', info.colore);
-  document.querySelectorAll('[data-modo]').forEach(el => el.classList.toggle('encoder-attivo', +el.dataset.modo === modo));
-  const pallino = Object.assign(document.createElement('span'), { className: 'pallino' });
-  $('statoEncoder').replaceChildren(pallino, 'Encoder: ' + info.nome);
+  if (!MODI[modo]) return;
+  modoAttivo = modo;
+  elementiModo.forEach((el, n) => el.classList.toggle('attiva', n === modo));
 }
+
+// Selezione dalla pagina: la comunica anche alla board, così il LED e l'encoder la seguono
+function selezionaDaPagina(modo) {
+  if (modo === modoAttivo) return;
+  evidenziaModo(modo);
+  inviaTesto(`M ${modo}\n`);
+}
+
+function inviaTesto(t) {
+  if (writer) writer.write(new TextEncoder().encode(t)).catch(() => {});
+}
+evidenziaModo(0);
 
 // Orario = duplicata, antiorario = schermo unico
 function impostaModoSchermi(valore) {
