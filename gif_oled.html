@@ -94,6 +94,9 @@
   .tile button { color: var(--t); border-color: color-mix(in srgb, var(--t) 45%, transparent); }
   .tile .fila { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
   .tile.disattiva input { opacity: .5; }
+  .tile-larga { grid-column: 1 / -1; min-height: 104px; }
+  /* Sul LED il glitch lampeggia ciano/magenta: qui lo stesso con un gradiente */
+  .tile[data-funzione="glitch"] { background: linear-gradient(100deg, #18c8e8, #ff3df2); }
 
   /* Interruttore per "Inverti" */
   .interruttore { appearance: none; width: 44px; height: 24px; border-radius: 12px; margin: 0; cursor: pointer;
@@ -204,6 +207,10 @@
       <div class="tile" data-funzione="velocita">
         <div class="tile-testa"><span class="tile-nome">Velocità</span><span class="tile-valore" id="velocitaValore">1×</span></div>
         <input type="range" id="velocita" min="0" max="10" step="1" value="4">
+      </div>
+      <div class="tile tile-larga" data-funzione="glitch">
+        <div class="tile-testa"><span class="tile-nome">Glitch</span><span class="tile-valore" id="glitchValore">0%</span></div>
+        <input type="range" id="glitch" min="0" max="100" step="1" value="0">
       </div>
     </div>
 
@@ -639,8 +646,62 @@ function elabora(i) {
       }
     }
   }
-  return { bit, byte: impacchetta(bit) };
+  const g = +$('glitch').value / 100;
+  const finale = g > 0 ? applicaGlitch(bit, g) : bit;
+  return { bit: finale, byte: impacchetta(finale) };
 }
+
+// ---------- Effetto glitch ----------
+// Ogni riga e ogni pixel hanno uno spostamento casuale ma fisso (seme costante):
+// l'intensità lo scala soltanto, quindi tornando a 0 tutto torna esattamente al suo posto.
+const GLITCH_FASCE_MAX = 0.5;   // spostamento massimo delle fasce, in frazione della larghezza
+const GLITCH_SPARSO_MAX = 24;   // spostamento massimo dei singoli pixel, in pixel
+let campoGlitch = null;
+
+function prng(seme) {  // mulberry32: numeri casuali ripetibili
+  return () => {
+    seme = (seme + 0x6D2B79F5) | 0;
+    let t = Math.imul(seme ^ (seme >>> 15), 1 | seme);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function preparaGlitch() {
+  if (campoGlitch?.w === LW && campoGlitch?.h === LH) return campoGlitch;
+  const r = prng(1234);
+  // Fasce orizzontali di altezza casuale: circa metà scorre a destra o sinistra, le altre restano ferme
+  const fascia = new Float32Array(LH);
+  for (let y = 0; y < LH; ) {
+    const alt = 1 + Math.floor(r() * 8), off = r() < 0.5 ? (r() * 2 - 1) : 0;
+    for (let k = 0; k < alt && y < LH; k++, y++) fascia[y] = off;
+  }
+  // Direzione propria di ogni pixel
+  const vx = new Float32Array(LW * LH), vy = new Float32Array(LW * LH);
+  for (let p = 0; p < LW * LH; p++) { vx[p] = r() * 2 - 1; vy[p] = r() * 2 - 1; }
+  return campoGlitch = { w: LW, h: LH, fascia, vx, vy };
+}
+
+function applicaGlitch(bit, g) {
+  const { fascia, vx, vy } = preparaGlitch();
+  const out = new Uint8Array(LW * LH);
+  // Le fasce si muovono subito, la dispersione dei pixel cresce più lentamente (g²)
+  const spostaFascia = g * LW * GLITCH_FASCE_MAX, sparso = g * g * GLITCH_SPARSO_MAX;
+  for (let y = 0; y < LH; y++) for (let x = 0; x < LW; x++) {
+    const p = y * LW + x;
+    if (!bit[p]) continue;
+    const nx = Math.round(x + fascia[y] * spostaFascia + vx[p] * sparso);
+    const ny = Math.round(y + vy[p] * sparso);
+    if (ny < 0 || ny >= LH) continue;
+    out[ny * LW + (((nx % LW) + LW) % LW)] = 1;  // in orizzontale rientra dall'altro lato
+  }
+  return out;
+}
+
+$('glitch').addEventListener('input', () => {
+  $('glitchValore').textContent = $('glitch').value + '%';
+  invalida();
+});
 
 // Riporta i pixel logici sulla superficie fisica e li impacchetta nel formato del buffer SSD1306:
 // per ogni schermo 8 pagine da 128 byte, bit 0 = pixel in alto
@@ -676,6 +737,7 @@ const MODI = [
   { id: 'contenuto', nome: 'Contenuto',   colore: '#f2f2f2' },
   { id: 'anticipo',  nome: 'Anticipo 2°', colore: '#ec32e6' },
   { id: 'velocita',  nome: 'Velocità',    colore: '#c2ff3a' },
+  { id: 'glitch',    nome: 'Glitch',      colore: '#ff3df2' },
 ];
 
 // Testo scuro sui colori chiari, bianco su quelli scuri
@@ -695,6 +757,7 @@ const PASSO_SPOSTA = 4;      // pixel per scatto
 const PASSO_SOGLIA = 8;
 const PASSO_ZOOM = 1.1;      // fattore per scatto
 const PASSO_ANTICIPO = 0.1;  // secondi per scatto
+const PASSO_GLITCH = 4;      // punti percentuali per scatto
 let attesaGif = null, modoAttivo = 0;
 
 function eventoEncoder(riga) {
@@ -721,6 +784,7 @@ function eventoEncoder(riga) {
       break;
     }
     case 'velocita':  impostaControllo('velocita', Math.min(VELOCITA.length - 1, Math.max(0, +$('velocita').value + d))); break;
+    case 'glitch':    impostaControllo('glitch', Math.min(100, Math.max(0, +$('glitch').value + d * PASSO_GLITCH))); break;
   }
 }
 

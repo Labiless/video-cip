@@ -48,16 +48,26 @@ const uint8_t COLORI[][3] = {
   {255, 255, 255}, // 7 bianco:    contenuto (orario = duplicata, antiorario = schermo unico)
   {255, 0, 200},   // 8 magenta:   anticipo del secondo schermo
   {150, 255, 0},   // 9 lime:      velocità di riproduzione
+  {255, 0, 200},   // 10 glitch:   lampeggia alternando ciano e questo magenta
 };
+const uint8_t MODO_GLITCH = 10;
 const uint8_t N_MODI = sizeof(COLORI) / sizeof(COLORI[0]);
 uint8_t modo = 0;
 
 const uint8_t LUMINOSITA_LED = 10;  // percentuale (100 = massimo)
 
 void mostraLed() {
-  led.setPixelColor(0, COLORI[modo][0] * LUMINOSITA_LED / 100, COLORI[modo][1] * LUMINOSITA_LED / 100,
-                       COLORI[modo][2] * LUMINOSITA_LED / 100);
+  // Nel modo glitch il LED alterna ciano e magenta ogni 120 ms
+  const uint8_t *c = COLORI[modo];
+  if (modo == MODO_GLITCH && (millis() / 120) % 2) c = COLORI[6];
+  led.setPixelColor(0, c[0] * LUMINOSITA_LED / 100, c[1] * LUMINOSITA_LED / 100, c[2] * LUMINOSITA_LED / 100);
   led.show();
+}
+
+void aggiornaLampeggio() {
+  static uint32_t ultimaFase = 0;
+  uint32_t fase = millis() / 120;
+  if (modo == MODO_GLITCH && fase != ultimaFase) { ultimaFase = fase; mostraLed(); }
 }
 
 // ---------- Rotary encoder ----------
@@ -186,6 +196,7 @@ void setup() {
 
 void loop() {
   gestisciEncoder();
+  aggiornaLampeggio();
 
   // Frame interrotto (es. pagina chiusa a metà invio): lo scarta
   if (inFrame && millis() - ultimoByte > 200) inFrame = false;
