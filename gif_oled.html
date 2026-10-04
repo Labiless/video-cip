@@ -122,7 +122,12 @@
                font-size: 12px; margin: 8px 0 12px; text-align: center; }
   .sotto { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   .sotto select { flex: 1; min-width: 0; }
-  .sotto + .sotto { margin-top: 10px; }
+  .sotto + .sotto, .sotto + .registrazione, .registrazione + .sotto { margin-top: 10px; }
+  .registrazione { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 10px 0; }
+  .registrazione .stato { flex: 1; }
+  .progresso { flex: 1; min-width: 60px; height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+  #progressoReg { height: 100%; width: 0; background: var(--danger); }
+  #registra.rec { background: var(--danger); border-color: var(--danger); color: #fff; }
   .info { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .aiuto { margin: 12px 0 0; color: var(--muted); font-size: 12px; }
   .avviso { margin-top: 12px; font-size: 13px; color: var(--danger); }
@@ -225,6 +230,17 @@
         <button id="play" disabled>Pausa</button>
         <span class="info" id="info">Nessuna GIF caricata</span>
       </div>
+      <div class="registrazione">
+        <div class="sotto">
+          <button id="registra" disabled>⏺ Registra</button>
+          <div class="progresso"><div id="progressoReg"></div></div>
+          <span class="info" id="tempoReg">0,0 / 5,0 s</span>
+        </div>
+        <div class="sotto">
+          <span class="stato" id="statoReg">Registra fino a 5 s: senza pagina collegata la board li riproduce in loop.</span>
+          <button id="eliminaReg" class="piccolo" disabled>Elimina dalla board</button>
+        </div>
+      </div>
       <div class="sotto">
         <label for="orientamento" class="info">Orientamento</label>
         <select id="orientamento">
@@ -294,44 +310,73 @@ if (!('serial' in navigator) || !('ImageDecoder' in window)) {
 
 function setStato(el, testo, tipo) { el.textContent = testo; el.className = 'stato ' + (tipo || ''); }
 
-$('connetti').onclick = async () => {
+$('connetti').onclick = () => porta ? disconnetti() : connetti();
+
+async function connetti() {
   try {
     porta = await navigator.serial.requestPort();
     await porta.open({ baudRate: 115200 });
+    // DTR alto = "pagina collegata": finché resta così la board non riproduce la registrazione
+    await porta.setSignals({ dataTerminalReady: true }).catch(() => {});
     writer = porta.writable.getWriter();
     pronta = true; inviato = -1;
     setStato($('statoBoard'), 'Connessa', 'ok');
-    $('connetti').disabled = true;
+    $('connetti').textContent = 'Disconnetti';
+    $('connetti').classList.remove('primary');
+    $('eliminaReg').disabled = false;
     leggiRisposte();
     inviaTesto('Q\n');  // chiede alla board quale funzione è attiva
+    if (registrazioneDaSalvare) inviaRegistrazione(registrazioneDaSalvare);
   } catch (e) {
+    porta = null;
     setStato($('statoBoard'), 'Connessione non riuscita: ' + e.message, 'err');
   }
-};
+}
+
+// Chiude la porta: la board, senza pagina, passa a riprodurre la registrazione salvata
+async function disconnetti() {
+  const p = porta, r = reader, w = writer;
+  porta = writer = reader = null;
+  try { await r?.cancel(); } catch (e) {}
+  try { w?.releaseLock(); } catch (e) {}
+  try { await p?.close(); } catch (e) {}
+  segnaDisconnessa('Disconnessa: la board riproduce la registrazione salvata', '');
+}
+
+function segnaDisconnessa(testo, tipo) {
+  porta = writer = reader = null;
+  salvataggio = false;
+  setStato($('statoBoard'), testo, tipo);
+  $('connetti').textContent = 'Connetti board';
+  $('connetti').classList.add('primary');
+  $('eliminaReg').disabled = true;
+}
 
 // La board risponde 'K' dopo aver mostrato ogni frame
 // e manda righe "E modo scatti" quando si usa l'encoder
 async function leggiRisposte() {
-  reader = porta.readable.getReader();
+  const r = reader = porta.readable.getReader();
   let riga = '';
   try {
     while (true) {
-      const { value, done } = await reader.read();
+      const { value, done } = await r.read();
       if (done) break;
       for (const b of value) {
         if (b === 75) pronta = true;  // 'K'
-        else if (b === 10) { eventoEncoder(riga); riga = ''; }
+        else if (b === 10) {
+          if (riga[0] === 'S') esitoSalvataggio(riga);
+          else if (riga[0] === 'I') infoBoard(riga);
+          else eventoEncoder(riga);
+          riga = '';
+        }
         else if (b !== 13 && riga.length < 40) riga += String.fromCharCode(b);
       }
     }
   } catch (e) { /* porta chiusa */ }
+  finally { try { r.releaseLock(); } catch (e) {} }
 }
 
-navigator.serial?.addEventListener('disconnect', () => {
-  writer = null; reader = null; porta = null;
-  setStato($('statoBoard'), 'Board scollegata', 'err');
-  $('connetti').disabled = false;
-});
+navigator.serial?.addEventListener('disconnect', () => segnaDisconnessa('Board scollegata', 'err'));
 
 async function inviaFrame(i) {
   pronta = false; ultimoInvio = performance.now(); inviato = i;
@@ -450,6 +495,7 @@ async function carica(dati, t) {
       (totale > MAX_FRAME ? ` (limitata ai primi ${MAX_FRAME})` : '');
     setStato($('statoGif'), '');
     tela.classList.add('spostabile');
+    $('registra').disabled = false;
     return true;
   } catch (e) {
     // AbortError: decoder chiuso perché è arrivata un'altra GIF
@@ -840,6 +886,114 @@ function scorriLibreria(d) {
   attesaGif = setTimeout(() => caricaUrl(url, false), 300);
 }
 
+// ---------- Registrazione ----------
+// Cattura quello che si vede sugli schermi (con zoom, glitch, ecc. già applicati)
+// e lo salva sulla board, che lo riproduce in loop quando la pagina non è collegata
+const DURATA_MAX_REG = 5000;     // ms
+const INTERVALLO_MIN_REG = 33;   // al massimo ~30 frame al secondo, per non riempire la flash
+let registrando = false, inizioReg = 0, catture = [], ultimoCatturato = null;
+let registrazioneDaSalvare = null, salvataggio = false, attesaSalvataggio = null;
+
+$('registra').onclick = () => registrando ? fermaRegistrazione(performance.now()) : avviaRegistrazione();
+
+function avviaRegistrazione() {
+  if (!sorgenti.length || salvataggio) return;
+  registrando = true; inizioReg = performance.now(); catture = []; ultimoCatturato = null;
+  $('registra').textContent = '■ Ferma'; $('registra').classList.add('rec');
+  setStato($('statoReg'), 'Registrazione in corso: fai le tue modifiche…');
+  cattura(inizioReg);
+}
+
+// Aggiunge il frame visibile solo se è cambiato rispetto all'ultimo registrato
+function cattura(ora) {
+  const f = frame(indice);
+  if (f === ultimoCatturato) return;
+  if (catture.length && ora - inizioReg - catture.at(-1).t < INTERVALLO_MIN_REG) return;
+  catture.push({ t: ora - inizioReg, byte: f.byte });
+  ultimoCatturato = f;
+}
+
+function aggiornaProgressoReg(ms) {
+  $('progressoReg').style.width = Math.min(100, ms / DURATA_MAX_REG * 100) + '%';
+  $('tempoReg').textContent = `${(ms / 1000).toFixed(1).replace('.', ',')} / ${(DURATA_MAX_REG / 1000).toFixed(1).replace('.', ',')} s`;
+}
+
+function fermaRegistrazione(ora) {
+  registrando = false;
+  $('registra').textContent = '⏺ Registra'; $('registra').classList.remove('rec');
+  const fine = Math.min(ora - inizioReg, DURATA_MAX_REG);
+  aggiornaProgressoReg(fine);
+  // Ogni frame dura fino all'inizio del successivo; l'ultimo fino alla fine della registrazione
+  const reg = catture.map((c, k) => ({
+    durata: Math.max(1, Math.min(65535, Math.round((k + 1 < catture.length ? catture[k + 1].t : fine) - c.t))),
+    byte: c.byte,
+  }));
+  catture = [];
+  if (!reg.length) return;
+  reg.rotazione = rotazione;
+  registrazioneDaSalvare = reg;
+  if (writer) inviaRegistrazione(reg);
+  else setStato($('statoReg'), `Registrati ${reg.length} frame: connetti la board per salvarli.`);
+}
+
+// Protocollo: "R n orientamento\n", poi per ogni frame 2 byte di durata (little endian) + 2048 byte
+async function inviaRegistrazione(reg) {
+  salvataggio = true;
+  setStato($('statoReg'), 'Salvataggio sulla board…');
+  // L'orientamento serve alla board per applicare zoom e spostamenti come li vedi tu
+  const intestazione = new TextEncoder().encode(`R ${reg.length} ${reg.rotazione}\n`);
+  const dati = new Uint8Array(intestazione.length + reg.length * 2050);
+  dati.set(intestazione);
+  reg.forEach((f, k) => {
+    const o = intestazione.length + k * 2050;
+    dati[o] = f.durata & 0xff; dati[o + 1] = f.durata >> 8;
+    dati.set(f.byte, o + 2);
+  });
+  clearTimeout(attesaSalvataggio);
+  attesaSalvataggio = setTimeout(() => esitoSalvataggio('S errore pagina'), 30000);
+  try { await writer.write(dati); }
+  catch (e) { esitoSalvataggio('S errore interrotto'); }
+}
+
+const MSG_FLASH_SIZE = 'La board non ha spazio per i file. In Arduino IDE scegli Strumenti → Flash Size → ' +
+  '"2MB (Sketch: 1MB, FS: 1MB)" e ricarica lo sketch.';
+const ERRORI_SALVATAGGIO = {
+  fs: MSG_FLASH_SIZE,
+  troppi: 'Registrazione troppo lunga per la board.',
+  file: 'La board non riesce a creare il file nella flash.',
+  scrittura: 'Flash piena: scegli una partizione FS più grande in Flash Size.',
+  interrotto: 'Invio interrotto a metà: riprova.',
+  pagina: 'La board non ha risposto. Hai ricaricato lo sketch aggiornato?',
+};
+
+function esitoSalvataggio(riga) {
+  if (!salvataggio && riga !== 'S 0') return;
+  clearTimeout(attesaSalvataggio);
+  salvataggio = false; inviato = -1;
+  const [, valore, motivo] = riga.split(' ');
+  if (valore === '0') setStato($('statoReg'), 'Registrazione eliminata dalla board.');
+  else if (+valore > 0) {
+    registrazioneDaSalvare = null;
+    setStato($('statoReg'), `Salvata sulla board (${valore} frame). Disconnetti o alimenta a batteria per vederla in loop.`, 'ok');
+  } else setStato($('statoReg'), 'Salvataggio non riuscito: ' +
+    (ERRORI_SALVATAGGIO[motivo] || `errore sconosciuto (${riga})`), 'err');
+}
+
+// Risposta a Q: la board dice se ha spazio per i file e se c'è già una registrazione
+function infoBoard(riga) {
+  const m = riga.match(/^I fs (\d) (\d+)$/);
+  if (!m) return;
+  if (m[1] === '0') setStato($('statoReg'), MSG_FLASH_SIZE, 'err');
+  else if (+m[2] > 0 && !registrando && !salvataggio)
+    setStato($('statoReg'), `Sulla board c'è una registrazione di ${m[2]} frame.`);
+}
+
+$('eliminaReg').onclick = () => {
+  if (!confirm('Eliminare la registrazione salvata sulla board?')) return;
+  salvataggio = true;
+  inviaTesto('R 0\n');
+};
+
 // ---------- Riproduzione ----------
 let indice = 0, prossimoCambio = 0, inPausa = false;
 
@@ -888,9 +1042,14 @@ function ciclo(ora) {
     }
     mostra(indice);
   }
+  if (registrando) {
+    const ms = ora - inizioReg;
+    if (ms >= DURATA_MAX_REG) fermaRegistrazione(ora);
+    else { cattura(ora); aggiornaProgressoReg(ms); }
+  }
   // Invia l'ultimo frame solo quando la board ha finito il precedente
   // (timeout di sicurezza nel caso una risposta vada persa)
-  if (writer && sorgenti.length && inviato !== indice &&
+  if (writer && !salvataggio && sorgenti.length && inviato !== indice &&
       (pronta || ora - ultimoInvio > 500)) inviaFrame(indice);
   requestAnimationFrame(ciclo);
 }

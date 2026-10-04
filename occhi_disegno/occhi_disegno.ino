@@ -4,6 +4,18 @@
 //   C       -> cancella tutto
 //   M n     -> seleziona la funzione n dell'encoder (come dopo n click)
 //   Q       -> chiede la funzione attiva: risponde con "E modo 0"
+//   R n r   -> seguito da n frame registrati (r = orientamento degli schermi: 0, 90, 180, 270),
+//              ciascuno = 2 byte di durata in ms (little endian)
+//              + 2048 byte come per F; li salva nella flash e risponde "S n",
+//              oppure "S errore <motivo>" (fs, troppi, file, scrittura, interrotto).
+//              R 0 cancella la registrazione.
+//
+// Risponde anche a Q con "I fs <1 se la flash ha spazio per i file, altrimenti 0> <frame salvati>"
+//
+// Senza pagina collegata (porta chiusa o board a batteria) riproduce in loop la registrazione;
+// l'encoder continua a regolare zoom, posizione, inverti, velocità e glitch (le altre funzioni
+// vengono saltate dal click, perché senza pagina non possono funzionare).
+// Serve una partizione per i file: Strumenti -> Flash Size -> "2MB (Sketch: 1MB, FS: 1MB)"
 //   F + 2048 byte binari -> frame intero; risponde 'K' quando l'ha mostrato
 //     byte 0-1023 = schermo sinistro, 1024-2047 = destro, nel formato del buffer
 //     SSD1306: 8 pagine da 128 byte, ogni byte = 8 pixel in verticale (bit 0 in alto)
@@ -19,6 +31,7 @@
 #include <Wire.h>
 #include <U8g2lib.h>
 #include <Adafruit_NeoPixel.h>  // da installare: Gestione librerie -> "Adafruit NeoPixel"
+#include <LittleFS.h>
 
 // Schermo sinistro su I2C0 (GP0/GP1), destro su I2C1 (GP2/GP3)
 // Se uno schermo risulta capovolto usa setFlipMode(1) in setup(), non U8G2_R2:
@@ -93,6 +106,46 @@ void inviaEvento(int32_t scatti) {
   Serial.print(scatti); Serial.print('\n');
 }
 
+// ---------- Effetti senza pagina ----------
+// Valori usati solo durante la riproduzione autonoma della registrazione
+const uint8_t MODO_ZOOM = 2, MODO_POSIZIONE = 3, MODO_INVERTI = 6, MODO_VELOCITA = 9;
+const uint16_t VELOCITA_PCT[] = {10, 25, 50, 75, 100, 125, 150, 200, 300, 400, 600};  // come nella pagina
+const uint8_t N_VELOCITA = sizeof(VELOCITA_PCT) / sizeof(VELOCITA_PCT[0]);
+const int16_t PASSO_SPOSTA = 4;     // pixel per scatto
+const uint8_t PASSO_GLITCH = 4;     // punti percentuali per scatto
+uint8_t velocitaIdx = 4;            // 100%
+uint16_t zoomPct = 100;
+int16_t spostaX = 0;
+bool invertiLocale = false;
+uint8_t glitchPct = 0;
+bool ridisegna = false;             // un effetto è cambiato: rielabora il frame mostrato
+bool paginaCollegata = true;
+
+bool utileSenzaPagina(uint8_t m) {
+  return m == MODO_ZOOM || m == MODO_POSIZIONE || m == MODO_INVERTI || m == MODO_VELOCITA || m == MODO_GLITCH;
+}
+
+// Passa alla prossima funzione utilizzabile (senza pagina salta quelle che non funzionano)
+void funzioneSuccessiva(bool includiAttuale) {
+  if (includiAttuale && (paginaCollegata || utileSenzaPagina(modo))) return;
+  do { modo = (modo + 1) % N_MODI; } while (!paginaCollegata && !utileSenzaPagina(modo));
+}
+
+void applicaSenzaPagina(int32_t d) {
+  for (int32_t k = 0; k < abs(d); k++) {
+    bool su = d > 0;
+    switch (modo) {
+      case MODO_ZOOM:      zoomPct = su ? min(800, zoomPct * 110 / 100) : max(25, zoomPct * 100 / 110); break;
+      case MODO_POSIZIONE: spostaX += su ? PASSO_SPOSTA : -PASSO_SPOSTA; break;
+      case MODO_INVERTI:   invertiLocale = su; break;
+      case MODO_VELOCITA:  if (su && velocitaIdx < N_VELOCITA - 1) velocitaIdx++;
+                           if (!su && velocitaIdx > 0) velocitaIdx--; break;
+      case MODO_GLITCH:    glitchPct = su ? min(100, glitchPct + PASSO_GLITCH) : max(0, glitchPct - PASSO_GLITCH); break;
+    }
+  }
+  ridisegna = true;
+}
+
 void gestisciEncoder() {
   noInterrupts();
   int32_t passi = passiEncoder;
@@ -100,7 +153,10 @@ void gestisciEncoder() {
   passiEncoder = passi - scatti * PASSI_PER_SCATTO;  // il resto vale per il prossimo scatto
   interrupts();
   // Se girando in senso orario i valori scendono, scambia i fili CLK e DT
-  if (scatti) inviaEvento(scatti);
+  if (scatti) {
+    if (paginaCollegata) inviaEvento(scatti);
+    else applicaSenzaPagina(scatti);
+  }
 
   // Pulsante con antirimbalzo: conta il click quando lo stato resta stabile per 30 ms
   static bool premuto = false, ultimaLettura = false;
@@ -110,9 +166,9 @@ void gestisciEncoder() {
   if (lettura != premuto && millis() - cambiato > 30) {
     premuto = lettura;
     if (premuto) {
-      modo = (modo + 1) % N_MODI;
+      funzioneSuccessiva(false);
       mostraLed();
-      inviaEvento(0);
+      if (paginaCollegata) inviaEvento(0);
     }
   }
 }
@@ -127,6 +183,241 @@ bool inFrame = false;
 uint16_t ricevuti = 0;
 uint32_t ultimoByte = 0;
 bool frameCompleto = false;
+
+// ---------- Registrazione nella flash ----------
+// File: 2 byte con il numero di frame, 2 byte con l'orientamento degli schermi,
+// poi per ogni frame 2 byte di durata + 2048 byte di immagine
+const char *FILE_REG = "/registrazione2.bin";
+const uint8_t BYTE_INTESTAZIONE = 4;
+const uint16_t MAX_FRAME_REG = 300;
+const uint16_t BYTE_FRAME_REG = 2 + 2 * BYTE_SCHERMO;
+bool fsPronto = false;
+
+// Ricezione di una registrazione dalla pagina
+bool inRegistrazione = false;
+File fileReg;
+uint16_t frameAttesi = 0, frameSalvati = 0, byteNelFrame = 0;
+uint8_t bufReg[BYTE_FRAME_REG];
+
+void errore(const char *motivo) {
+  Serial.print("S errore "); Serial.print(motivo); Serial.print('\n');
+}
+
+// Frame della registrazione salvata (0 se non c'è)
+uint16_t frameSalvatiInFlash() {
+  if (!fsPronto) return 0;
+  File f = LittleFS.open(FILE_REG, "r");
+  uint16_t n = 0;
+  if (f) { if (f.read((uint8_t *)&n, 2) != 2) n = 0; f.close(); }
+  return n;
+}
+
+void iniziaRicezioneRegistrazione(int n, int rot) {
+  if (!fsPronto) { errore("fs"); return; }
+  LittleFS.remove(FILE_REG);
+  if (n <= 0) { Serial.print("S 0\n"); return; }   // R 0 = cancella
+  if (n > MAX_FRAME_REG) { errore("troppi"); return; }
+  fileReg = LittleFS.open(FILE_REG, "w");
+  if (!fileReg) { errore("file"); return; }
+  uint16_t intestazione[2] = {(uint16_t)n, (uint16_t)rot};
+  fileReg.write((uint8_t *)intestazione, BYTE_INTESTAZIONE);
+  frameAttesi = n; frameSalvati = 0; byteNelFrame = 0;
+  ultimoByte = millis();  // il timeout parte da adesso, non dall'ultimo frame ricevuto
+  inRegistrazione = true;
+}
+
+void riceviRegistrazione() {
+  while (inRegistrazione && Serial.available()) {
+    int n = Serial.readBytes(bufReg + byteNelFrame, min((int)(BYTE_FRAME_REG - byteNelFrame), Serial.available()));
+    byteNelFrame += n;
+    ultimoByte = millis();
+    if (byteNelFrame == BYTE_FRAME_REG) {
+      if (fileReg.write(bufReg, BYTE_FRAME_REG) != BYTE_FRAME_REG) {  // flash piena
+        fileReg.close();
+        LittleFS.remove(FILE_REG);
+        inRegistrazione = false;
+        errore("scrittura");
+        // i byte rimanenti della registrazione verranno ignorati come testo non valido
+        return;
+      }
+      byteNelFrame = 0;
+      if (++frameSalvati == frameAttesi) {
+        fileReg.close();
+        inRegistrazione = false;
+        Serial.print("S "); Serial.print(frameSalvati); Serial.print('\n');
+      }
+    }
+  }
+}
+
+void annullaRicezioneRegistrazione() {
+  fileReg.close();
+  LittleFS.remove(FILE_REG);
+  inRegistrazione = false;
+  errore("interrotto");
+}
+
+// ---------- Riproduzione autonoma ----------
+bool inRiproduzione = false;
+File fileRip;
+uint16_t frameRip = 0, indiceRip = 0, rotRip = 0;
+uint32_t prossimoRip = 0;   // quando finisce il frame in corso
+uint32_t ultimoContatto = 0;
+
+// Gli effetti lavorano sulla superficie "logica", cioè come la vedi (64 x 256 se gli schermi sono in verticale)
+const int W_FIS = 256, H_FIS = 64;  // superficie fisica: i due schermi affiancati
+int LW = W_FIS, LH = H_FIS;
+uint8_t frameGrezzo[2 * BYTE_SCHERMO];  // frame come registrato, prima degli effetti
+uint8_t logico[W_FIS * H_FIS];                  // 1 byte per pixel, dopo zoom/posizione/inverti
+
+void logicoAFisico(int lx, int ly, int &px, int &py) {
+  switch (rotRip) {
+    case 90:  px = ly;         py = H_FIS - 1 - lx; break;
+    case 180: px = W_FIS - 1 - lx; py = H_FIS - 1 - ly; break;
+    case 270: px = W_FIS - 1 - ly; py = lx;         break;
+    default:  px = lx;         py = ly;
+  }
+}
+
+// Formato del buffer SSD1306: 8 pagine da 128 byte, ogni byte = 8 pixel in verticale (bit 0 in alto)
+inline bool pixelGrezzo(int px, int py) {
+  return frameGrezzo[(px >= 128 ? BYTE_SCHERMO : 0) + (py >> 3) * 128 + (px & 127)] >> (py & 7) & 1;
+}
+
+inline void accendiSchermo(int px, int py) {
+  uint8_t *buf = px < 128 ? sx.getBufferPtr() : bufferDx;
+  buf[(py >> 3) * 128 + (px & 127)] |= 1 << (py & 7);
+}
+
+// Divisione arrotondata verso il basso anche per i negativi (evita una colonna doppia al centro)
+inline int divGiu(int a, int b) { return a >= 0 ? a / b : -((-a + b - 1) / b); }
+
+// Glitch: spostamenti casuali ma fissi (seme costante), scalati dall'intensità come nella pagina
+int8_t fascia[W_FIS];          // per riga: verso e ampiezza dello scorrimento della sua fascia
+int8_t glitchVx[W_FIS * H_FIS], glitchVy[W_FIS * H_FIS];
+int campoPerLW = 0;
+
+void preparaGlitch() {
+  if (campoPerLW == LW) return;
+  campoPerLW = LW;
+  uint32_t seme = 1234;
+  auto casuale = [&seme]() { seme ^= seme << 13; seme ^= seme >> 17; seme ^= seme << 5; return seme; };
+  for (int y = 0; y < LH;) {
+    int alt = 1 + casuale() % 8;
+    int8_t off = (casuale() % 2) ? (int8_t)((int)(casuale() % 255) - 127) : 0;
+    for (int k = 0; k < alt && y < LH; k++, y++) fascia[y] = off;
+  }
+  for (int p = 0; p < LW * LH; p++) {
+    glitchVx[p] = (int)(casuale() % 255) - 127;
+    glitchVy[p] = (int)(casuale() % 255) - 127;
+  }
+}
+
+// Applica zoom, posizione, inverti e glitch al frame grezzo e lo mette nei buffer degli schermi
+void elaboraFrame() {
+  static int16_t srcX[W_FIS], srcY[W_FIS];
+  int cx = LW / 2, cy = LH / 2;
+  // Zoom e posizione: per ogni pixel mostrato, quale pixel della registrazione va preso
+  for (int lx = 0; lx < LW; lx++) srcX[lx] = cx + divGiu((lx - cx - spostaX) * 100, zoomPct);
+  for (int ly = 0; ly < LH; ly++) srcY[ly] = cy + divGiu((ly - cy) * 100, zoomPct);
+  for (int ly = 0; ly < LH; ly++) {
+    for (int lx = 0; lx < LW; lx++) {
+      int sxL = srcX[lx], syL = srcY[ly];
+      bool acceso = false;
+      if (sxL >= 0 && sxL < LW && syL >= 0 && syL < LH) {
+        int px, py;
+        logicoAFisico(sxL, syL, px, py);
+        acceso = pixelGrezzo(px, py);
+      }
+      logico[ly * LW + lx] = acceso != invertiLocale;
+    }
+  }
+
+  memset(sx.getBufferPtr(), 0, BYTE_SCHERMO);
+  memset(bufferDx, 0, BYTE_SCHERMO);
+  int32_t g = glitchPct;
+  int16_t spostaRiga[W_FIS];
+  int16_t sparso[256];  // spostamento per ogni valore di direzione (-127..127)
+  if (g) {
+    preparaGlitch();
+    // Fasce: fino a metà larghezza; dispersione: fino a 24 px, cresce con g² come nella pagina
+    for (int y = 0; y < LH; y++) spostaRiga[y] = fascia[y] * g * (LW / 2) / (127 * 100);
+    for (int v = -127; v <= 127; v++) sparso[v + 128] = v * g * g * 24 / (127 * 10000);
+  }
+  for (int ly = 0; ly < LH; ly++) {
+    for (int lx = 0; lx < LW; lx++) {
+      int p = ly * LW + lx;
+      if (!logico[p]) continue;
+      int nx = lx, ny = ly;
+      if (g) {
+        nx += spostaRiga[ly] + sparso[glitchVx[p] + 128];
+        ny += sparso[glitchVy[p] + 128];
+        if (ny < 0 || ny >= LH) continue;
+        nx = ((nx % LW) + LW) % LW;  // in orizzontale rientra dall'altro lato
+      }
+      int px, py;
+      logicoAFisico(nx, ny, px, py);
+      accendiSchermo(px, py);
+    }
+  }
+  sx.sendBuffer();
+  dx.sendBuffer();
+}
+
+void avviaRiproduzione() {
+  static uint32_t ultimoTentativo = 0;  // senza registrazione riprova solo una volta al secondo
+  if (!fsPronto || millis() - ultimoTentativo < 1000) return;
+  ultimoTentativo = millis();
+  fileRip = LittleFS.open(FILE_REG, "r");
+  if (!fileRip) return;
+  uint16_t intestazione[2];
+  if (fileRip.read((uint8_t *)intestazione, BYTE_INTESTAZIONE) != BYTE_INTESTAZIONE || intestazione[0] == 0) {
+    fileRip.close();
+    return;
+  }
+  frameRip = intestazione[0];
+  rotRip = intestazione[1];
+  LW = (rotRip == 90 || rotRip == 270) ? H_FIS : W_FIS;
+  LH = (rotRip == 90 || rotRip == 270) ? W_FIS : H_FIS;
+  indiceRip = 0;
+  prossimoRip = millis();
+  inRiproduzione = true;
+  ridisegna = false;
+  // Se l'encoder era su una funzione che senza pagina non funziona, passa alla prima utilizzabile
+  funzioneSuccessiva(true);
+  mostraLed();
+}
+
+void fermaRiproduzione() {
+  if (inRiproduzione) fileRip.close();
+  inRiproduzione = false;
+}
+
+void passoRiproduzione() {
+  uint32_t ora = millis();
+  if ((int32_t)(ora - prossimoRip) < 0) {           // il frame attuale non è ancora finito
+    if (ridisegna) { ridisegna = false; elaboraFrame(); }  // ma un effetto è cambiato
+    return;
+  }
+  if (ora - prossimoRip > 1000) prossimoRip = ora;  // molto in ritardo: riparte da qui
+  // Salta i frame che sarebbero già finiti, così la durata totale resta quella registrata
+  uint32_t durata = 0;
+  for (uint16_t tentativi = 0; tentativi <= frameRip; tentativi++) {
+    if (indiceRip == frameRip) { fileRip.seek(BYTE_INTESTAZIONE); indiceRip = 0; }  // ricomincia il loop
+    uint16_t registrata;
+    if (fileRip.read((uint8_t *)&registrata, 2) != 2) { fermaRiproduzione(); return; }
+    indiceRip++;
+    durata = (uint32_t)registrata * 100 / VELOCITA_PCT[velocitaIdx];
+    if (durata == 0) durata = 1;
+    if ((int32_t)(ora - (prossimoRip + durata)) < 0) break;  // questo frame è ancora in corso
+    prossimoRip += durata;
+    fileRip.seek(fileRip.position() + 2 * BYTE_SCHERMO);
+  }
+  fileRip.read(frameGrezzo, 2 * BYTE_SCHERMO);
+  ridisegna = false;
+  elaboraFrame();
+  prossimoRip += durata;
+}
 
 void gestisci(char *cmd) {
   if (cmd[0] == 'P') {
@@ -148,6 +439,11 @@ void gestisci(char *cmd) {
     }
   } else if (cmd[0] == 'Q') {
     inviaEvento(0);  // la pagina chiede quale funzione è attiva
+    Serial.print("I fs "); Serial.print(fsPronto ? 1 : 0);
+    Serial.print(' '); Serial.print(frameSalvatiInFlash()); Serial.print('\n');
+  } else if (cmd[0] == 'R') {
+    int n, rot = 0;
+    if (sscanf(cmd + 1, "%d %d", &n, &rot) >= 1) iniziaRicezioneRegistrazione(n, rot);
   }
 }
 
@@ -186,6 +482,9 @@ void setup() {
   led.begin();
   mostraLed();
 
+  fsPronto = LittleFS.begin();  // false se in Flash Size non c'è spazio per i file
+  if (fsPronto) LittleFS.remove("/registrazione.bin");  // formato vecchio, senza orientamento
+
   pinMode(PIN_CLK, INPUT_PULLUP);
   pinMode(PIN_DT, INPUT_PULLUP);
   pinMode(PIN_SW, INPUT_PULLUP);
@@ -198,12 +497,22 @@ void loop() {
   gestisciEncoder();
   aggiornaLampeggio();
 
-  // Frame interrotto (es. pagina chiusa a metà invio): lo scarta
+  // Frame o registrazione interrotti (es. pagina chiusa a metà invio): li scarta
   if (inFrame && millis() - ultimoByte > 200) inFrame = false;
+  if (inRegistrazione && millis() - ultimoByte > 2000) annullaRicezioneRegistrazione();
+
+  // La pagina è collegata se la porta è aperta (DTR) o se ha mandato qualcosa da poco.
+  // Altrimenti, dopo un attimo, parte la registrazione salvata
+  if (Serial.available() || Serial) ultimoContatto = millis();
+  paginaCollegata = millis() - ultimoContatto < 1500;
+  if (paginaCollegata) fermaRiproduzione();
+  else if (!inRiproduzione) avviaRiproduzione();
+  if (inRiproduzione) { passoRiproduzione(); return; }
 
   // Legge tutti i comandi arrivati...
   while (Serial.available() && !frameCompleto) {
     if (inFrame) { riceviFrame(); continue; }
+    if (inRegistrazione) { riceviRegistrazione(); continue; }
     char c = Serial.read();
     if (c == 'F' && len == 0) {
       inFrame = true; ricevuti = 0; ultimoByte = millis();

@@ -85,6 +85,8 @@ btnConnetti.onclick = async () => {
   try {
     porta = await navigator.serial.requestPort();
     await porta.open({ baudRate: 115200 });
+    // DTR alto = "pagina collegata": la board non riproduce la registrazione salvata
+    await porta.setSignals({ dataTerminalReady: true }).catch(() => {});
     writer = porta.writable.getWriter();
     setStato('Connessa', 'ok');
     btnConnetti.disabled = true;
