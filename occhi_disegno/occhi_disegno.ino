@@ -15,6 +15,11 @@
 // Senza pagina collegata (porta chiusa o board a batteria) riproduce in loop la registrazione;
 // l'encoder continua a regolare zoom, posizione, inverti, velocità e glitch (le altre funzioni
 // vengono saltate dal click, perché senza pagina non possono funzionare).
+//
+// Audio (solo senza pagina): jack -> resistenza 10k -> GP26, massa del jack -> GND.
+// Il tasto BOOT attiva/disattiva la reazione ai bassi (LED: 2 lampi bianchi = attiva, 1 rosso = spenta).
+// Con l'audio attivo ogni colpo di basso fa partire una curva (sale e torna a 0) sull'effetto
+// selezionato col click; ruotando l'encoder si sceglie l'altezza della curva (non più il parametro).
 // Serve una partizione per i file: Strumenti -> Flash Size -> "2MB (Sketch: 1MB, FS: 1MB)"
 //   F + 2048 byte binari -> frame intero; risponde 'K' quando l'ha mostrato
 //     byte 0-1023 = schermo sinistro, 1024-2047 = destro, nel formato del buffer
@@ -32,6 +37,8 @@
 #include <U8g2lib.h>
 #include <Adafruit_NeoPixel.h>  // da installare: Gestione librerie -> "Adafruit NeoPixel"
 #include <LittleFS.h>
+#include "hardware/adc.h"
+#include "hardware/gpio.h"
 
 // Schermo sinistro su I2C0 (GP0/GP1), destro su I2C1 (GP2/GP3)
 // Se uno schermo risulta capovolto usa setFlipMode(1) in setup(), non U8G2_R2:
@@ -69,15 +76,42 @@ uint8_t modo = 0;
 
 const uint8_t LUMINOSITA_LED = 10;  // percentuale (100 = massimo)
 
+float fattoreLed = 1;  // con l'audio attivo il LED pulsa coi bassi (0..1)
+
 void mostraLed() {
   // Nel modo glitch il LED alterna ciano e magenta ogni 120 ms
   const uint8_t *c = COLORI[modo];
   if (modo == MODO_GLITCH && (millis() / 120) % 2) c = COLORI[6];
-  led.setPixelColor(0, c[0] * LUMINOSITA_LED / 100, c[1] * LUMINOSITA_LED / 100, c[2] * LUMINOSITA_LED / 100);
+  float k = LUMINOSITA_LED / 100.0 * fattoreLed;
+  led.setPixelColor(0, c[0] * k, c[1] * k, c[2] * k);
   led.show();
 }
 
+// Lampi di conferma (tasto BOOT): finché durano hanno la precedenza sul colore della funzione
+uint32_t inizioLampi = 0;
+uint8_t numeroLampi = 0, coloreLampi[3];
+
+void lampeggia(uint8_t volte, uint8_t r, uint8_t g, uint8_t b) {
+  numeroLampi = volte; coloreLampi[0] = r; coloreLampi[1] = g; coloreLampi[2] = b;
+  inizioLampi = millis();
+}
+
 void aggiornaLampeggio() {
+  if (numeroLampi) {
+    // Ogni lampo: 120 ms acceso + 120 ms spento
+    uint32_t t = millis() - inizioLampi;
+    static int8_t statoPrima = -1;
+    if (t >= numeroLampi * 240UL) { numeroLampi = 0; statoPrima = -1; mostraLed(); return; }
+    int8_t acceso = (t % 240) < 120;
+    if (acceso != statoPrima) {
+      statoPrima = acceso;
+      uint8_t k = LUMINOSITA_LED;
+      if (acceso) led.setPixelColor(0, coloreLampi[0] * k / 100, coloreLampi[1] * k / 100, coloreLampi[2] * k / 100);
+      else led.setPixelColor(0, 0);
+      led.show();
+    }
+    return;
+  }
   static uint32_t ultimaFase = 0;
   uint32_t fase = millis() / 120;
   if (modo == MODO_GLITCH && fase != ultimaFase) { ultimaFase = fase; mostraLed(); }
@@ -119,6 +153,9 @@ int16_t spostaX = 0;
 bool invertiLocale = false;
 uint8_t glitchPct = 0;
 bool ridisegna = false;             // un effetto è cambiato: rielabora il frame mostrato
+bool audioAttivo = false;           // acceso/spento col tasto BOOT
+const uint8_t PASSO_QUANTO_AUDIO = 5;
+uint8_t quantoAudio[N_MODI];        // per ogni effetto: quanto lo muovono i bassi, 0..100 (parte da 50)
 bool paginaCollegata = true;
 
 bool utileSenzaPagina(uint8_t m) {
@@ -132,6 +169,12 @@ void funzioneSuccessiva(bool includiAttuale) {
 }
 
 void applicaSenzaPagina(int32_t d) {
+  if (audioAttivo) {
+    // Con l'audio attivo l'encoder regola quanto i bassi influenzano l'effetto
+    quantoAudio[modo] = constrain((int)quantoAudio[modo] + d * PASSO_QUANTO_AUDIO, 0, 100);
+    ridisegna = true;
+    return;
+  }
   for (int32_t k = 0; k < abs(d); k++) {
     bool su = d > 0;
     switch (modo) {
@@ -169,6 +212,7 @@ void gestisciEncoder() {
       funzioneSuccessiva(false);
       mostraLed();
       if (paginaCollegata) inviaEvento(0);
+      ridisegna = true;  // con l'audio attivo l'effetto precedente torna al suo valore
     }
   }
 }
@@ -257,6 +301,153 @@ void annullaRicezioneRegistrazione() {
   errore("interrotto");
 }
 
+// ---------- Audio: colpi di basso ----------
+// Il secondo core campiona GP26 a 4 kHz, isola i bassi con un filtro passa-banda (~50-150 Hz)
+// e riconosce i colpi (cassa): l'energia dei bassi sale di colpo rispetto alla sua media recente.
+// A ogni colpo parte una curva: sale da 0 a 1 in CURVA_SALITA_MS e torna a 0 in CURVA_DISCESA_MS.
+// L'effetto selezionato segue la curva, scalata dalla quantità scelta con l'encoder (la "X").
+const uint8_t PIN_AUDIO = 26;            // ADC0
+const float FREQ_CAMPIONAMENTO = 4000;   // Hz
+const float FREQ_BASSI = 80;             // centro del filtro, Hz
+const float Q_BASSI = 0.9;               // larghezza del filtro (più basso = più largo)
+const float RUMORE_MINIMO = 8;           // sotto questo livello (unità ADC) è silenzio
+const float SOGLIA_COLPO = 1.6;          // colpo = energia dei bassi 1,6 volte sopra la media recente
+const uint16_t PAUSA_COLPI_MS = 120;     // dopo un colpo, per questo tempo non ne conta altri
+
+const uint16_t CURVA_SALITA_MS = 25;     // da 0 al massimo
+const uint16_t CURVA_DISCESA_MS = 250;   // dal massimo di nuovo a 0
+
+// Con la quantità al 100%, al picco della curva ogni effetto arriva a:
+const uint16_t AUDIO_ZOOM_MAX = 150;      // +150% di zoom
+const int16_t AUDIO_SPOSTA_MAX = 64;      // 64 pixel di spostamento a destra
+const uint16_t AUDIO_VELOCITA_MAX = 300;  // velocità ×4 (+300%)
+const uint8_t AUDIO_GLITCH_MAX = 100;     // glitch +100%
+// Inverti: resta invertito per una parte della curva, più lunga quanto più è alta la quantità
+
+volatile uint32_t colpiRilevati = 0;      // scritto dal core 1 a ogni colpo, letto dal core 0
+float livelloMostrato = 0;                // valore della curva usato per il frame sugli schermi
+
+// Valore attuale della curva (0..1). Un nuovo colpo durante la discesa riparte dal punto in cui
+// si trova, così la curva non fa salti all'indietro.
+float valoreCurva() {
+  static uint32_t colpiVisti = 0, inizio = 0;
+  static float partenza = 0, ultimo = 0;
+  uint32_t ora = millis();
+  if (colpiRilevati != colpiVisti) {
+    colpiVisti = colpiRilevati;
+    partenza = ultimo;
+    inizio = ora;
+  }
+  if (inizio == 0) return 0;
+  uint32_t t = ora - inizio;
+  float v;
+  if (t < CURVA_SALITA_MS) v = partenza + (1 - partenza) * t / CURVA_SALITA_MS;
+  else if (t < CURVA_SALITA_MS + CURVA_DISCESA_MS) {
+    float u = 1 - (float)(t - CURVA_SALITA_MS) / CURVA_DISCESA_MS;
+    v = u * u;  // scende in fretta all'inizio e rallenta verso lo 0
+  } else v = 0;
+  return ultimo = v;
+}
+
+// Quanto l'audio spinge l'effetto selezionato (0..1); 0 per gli altri effetti o con l'audio spento
+float spintaAudio(uint8_t m) {
+  if (!audioAttivo || modo != m) return 0;
+  return livelloMostrato * quantoAudio[m] / 100.0;
+}
+
+// Valori usati per disegnare: quelli dell'encoder più la spinta della curva
+int zoomCorrente()      { return min(800, (int)(zoomPct * (1 + spintaAudio(MODO_ZOOM) * AUDIO_ZOOM_MAX / 100))); }
+int spostaCorrente()    { return spostaX + (int)(spintaAudio(MODO_POSIZIONE) * AUDIO_SPOSTA_MAX); }
+int glitchCorrente()    { return min(100, (int)(glitchPct + spintaAudio(MODO_GLITCH) * AUDIO_GLITCH_MAX)); }
+uint32_t velocitaCorrente() {
+  return VELOCITA_PCT[velocitaIdx] * (1 + spintaAudio(MODO_VELOCITA) * AUDIO_VELOCITA_MAX / 100);
+}
+bool invertiCorrente() {
+  // Invertito finché la curva è sopra una soglia: con quantità alta il flash dura di più
+  bool scatto = audioAttivo && modo == MODO_INVERTI && quantoAudio[MODO_INVERTI] > 0 &&
+                livelloMostrato > 1 - quantoAudio[MODO_INVERTI] / 100.0 * 0.9;
+  return invertiLocale != scatto;
+}
+
+// Effetti che cambiano l'immagine (la velocità invece agisce solo sui tempi)
+bool effettoVisivo(uint8_t m) {
+  return m == MODO_ZOOM || m == MODO_POSIZIONE || m == MODO_INVERTI || m == MODO_GLITCH;
+}
+
+// Il LED segue la curva: a ogni colpo riconosciuto fa un lampo, così si vede cosa rileva
+void aggiornaLedAudio() {
+  static uint32_t ultimo = 0;
+  if (millis() - ultimo < 15 || numeroLampi) return;
+  ultimo = millis();
+  float f = (audioAttivo && !paginaCollegata) ? 0.1 + 0.9 * valoreCurva() : 1;
+  if (fabsf(f - fattoreLed) > 0.04 || (f == 1 && fattoreLed != 1)) { fattoreLed = f; mostraLed(); }
+}
+
+void setup1() {
+  adc_init();
+  adc_gpio_init(PIN_AUDIO);
+  gpio_pull_down(PIN_AUDIO);  // senza cavo il pin non fluttua (e non dà colpi finti)
+  adc_select_input(PIN_AUDIO - 26);
+}
+
+void loop1() {
+  // Coefficienti del filtro passa-banda (biquad) e degli inviluppi, calcolati una volta
+  static bool pronto = false;
+  static float b0, b2, a1, a2, attVeloce, rilVeloce, coeffMedia;
+  if (!pronto) {
+    float w = 2 * PI * FREQ_BASSI / FREQ_CAMPIONAMENTO, alfa = sin(w) / (2 * Q_BASSI), a0 = 1 + alfa;
+    b0 = alfa / a0; b2 = -alfa / a0; a1 = -2 * cos(w) / a0; a2 = (1 - alfa) / a0;
+    attVeloce = 1 - exp(-1 / (0.003 * FREQ_CAMPIONAMENTO));  // segue il colpo in ~3 ms
+    rilVeloce = 1 - exp(-1 / (0.060 * FREQ_CAMPIONAMENTO));  // e lo lascia in ~60 ms
+    coeffMedia = 1 - exp(-1 / (0.500 * FREQ_CAMPIONAMENTO)); // media degli ultimi ~0,5 s
+    pronto = true;
+  }
+  static uint32_t prossimo = micros(), ultimoColpo = 0;
+  static float x1 = 0, x2 = 0, y1 = 0, y2 = 0, veloce = 0, media = RUMORE_MINIMO;
+  static bool armato = true;
+
+  while ((int32_t)(micros() - prossimo) < 0) {}
+  prossimo += (uint32_t)(1e6 / FREQ_CAMPIONAMENTO);
+
+  float x = adc_read();  // 0..4095; con la sola resistenza arriva solo la metà positiva dell'onda
+  float y = b0 * x + b2 * x2 - a1 * y1 - a2 * y2;
+  x2 = x1; x1 = x; y2 = y1; y1 = y;
+
+  // Due inviluppi dell'energia dei bassi: uno veloce (il colpo) e uno lento (la media)
+  float a = fabsf(y);
+  veloce += (a > veloce ? attVeloce : rilVeloce) * (a - veloce);
+  media += coeffMedia * (veloce - media);
+  if (media < RUMORE_MINIMO) media = RUMORE_MINIMO;
+
+  // Colpo: il veloce supera la media di SOGLIA_COLPO volte. Si riarma solo quando torna giù,
+  // così un basso lungo conta come un colpo solo
+  uint32_t ora = millis();
+  if (armato && veloce > media * SOGLIA_COLPO && veloce > RUMORE_MINIMO * 2 &&
+      ora - ultimoColpo > PAUSA_COLPI_MS) {
+    colpiRilevati++;
+    ultimoColpo = ora;
+    armato = false;
+  } else if (!armato && veloce < media * 1.15) {
+    armato = true;
+  }
+}
+
+// Tasto BOOT: letto ogni 20 ms (la lettura blocca un istante la flash e l'altro core)
+void gestisciBoot() {
+  static uint32_t ultimaLettura = 0;
+  static bool premutoPrima = false;
+  if (millis() - ultimaLettura < 20) return;
+  ultimaLettura = millis();
+  bool premuto = BOOTSEL;
+  if (premuto && !premutoPrima) {
+    audioAttivo = !audioAttivo;
+    if (audioAttivo) lampeggia(2, 255, 255, 255);
+    else lampeggia(1, 255, 0, 0);
+    ridisegna = true;
+  }
+  premutoPrima = premuto;
+}
+
 // ---------- Riproduzione autonoma ----------
 bool inRiproduzione = false;
 File fileRip;
@@ -317,9 +508,12 @@ void preparaGlitch() {
 void elaboraFrame() {
   static int16_t srcX[W_FIS], srcY[W_FIS];
   int cx = LW / 2, cy = LH / 2;
+  livelloMostrato = valoreCurva();
+  int zoom = zoomCorrente(), sposta = spostaCorrente();
+  bool inverti = invertiCorrente();
   // Zoom e posizione: per ogni pixel mostrato, quale pixel della registrazione va preso
-  for (int lx = 0; lx < LW; lx++) srcX[lx] = cx + divGiu((lx - cx - spostaX) * 100, zoomPct);
-  for (int ly = 0; ly < LH; ly++) srcY[ly] = cy + divGiu((ly - cy) * 100, zoomPct);
+  for (int lx = 0; lx < LW; lx++) srcX[lx] = cx + divGiu((lx - cx - sposta) * 100, zoom);
+  for (int ly = 0; ly < LH; ly++) srcY[ly] = cy + divGiu((ly - cy) * 100, zoom);
   for (int ly = 0; ly < LH; ly++) {
     for (int lx = 0; lx < LW; lx++) {
       int sxL = srcX[lx], syL = srcY[ly];
@@ -329,13 +523,13 @@ void elaboraFrame() {
         logicoAFisico(sxL, syL, px, py);
         acceso = pixelGrezzo(px, py);
       }
-      logico[ly * LW + lx] = acceso != invertiLocale;
+      logico[ly * LW + lx] = acceso != inverti;
     }
   }
 
   memset(sx.getBufferPtr(), 0, BYTE_SCHERMO);
   memset(bufferDx, 0, BYTE_SCHERMO);
-  int32_t g = glitchPct;
+  int32_t g = glitchCorrente();
   int16_t spostaRiga[W_FIS];
   int16_t sparso[256];  // spostamento per ogni valore di direzione (-127..127)
   if (g) {
@@ -395,6 +589,8 @@ void fermaRiproduzione() {
 
 void passoRiproduzione() {
   uint32_t ora = millis();
+  // I bassi cambiano l'immagine: ridisegna anche a metà frame (fin dove l'I2C ce la fa)
+  if (audioAttivo && effettoVisivo(modo) && fabsf(valoreCurva() - livelloMostrato) > 0.02) ridisegna = true;
   if ((int32_t)(ora - prossimoRip) < 0) {           // il frame attuale non è ancora finito
     if (ridisegna) { ridisegna = false; elaboraFrame(); }  // ma un effetto è cambiato
     return;
@@ -407,7 +603,8 @@ void passoRiproduzione() {
     uint16_t registrata;
     if (fileRip.read((uint8_t *)&registrata, 2) != 2) { fermaRiproduzione(); return; }
     indiceRip++;
-    durata = (uint32_t)registrata * 100 / VELOCITA_PCT[velocitaIdx];
+    livelloMostrato = valoreCurva();
+    durata = (uint32_t)registrata * 100 / velocitaCorrente();
     if (durata == 0) durata = 1;
     if ((int32_t)(ora - (prossimoRip + durata)) < 0) break;  // questo frame è ancora in corso
     prossimoRip += durata;
@@ -482,6 +679,8 @@ void setup() {
   led.begin();
   mostraLed();
 
+  memset(quantoAudio, 50, sizeof(quantoAudio));
+
   fsPronto = LittleFS.begin();  // false se in Flash Size non c'è spazio per i file
   if (fsPronto) LittleFS.remove("/registrazione.bin");  // formato vecchio, senza orientamento
 
@@ -495,6 +694,8 @@ void setup() {
 
 void loop() {
   gestisciEncoder();
+  gestisciBoot();
+  aggiornaLedAudio();
   aggiornaLampeggio();
 
   // Frame o registrazione interrotti (es. pagina chiusa a metà invio): li scarta
