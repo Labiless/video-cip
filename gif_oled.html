@@ -132,6 +132,22 @@
   .aiuto { margin: 12px 0 0; color: var(--muted); font-size: 12px; }
   .avviso { margin-top: 12px; font-size: 13px; color: var(--danger); }
   .avviso:empty { display: none; }
+
+  /* Fotocamera */
+  .camera { border: 1px solid var(--line); border-radius: 16px; padding: 16px; background: var(--panel);
+            color: var(--fg); width: min(560px, calc(100vw - 32px)); }
+  .camera::backdrop { background: rgba(0, 0, 0, .6); }
+  .camera-testa { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 12px; }
+  .camera h2 { font-size: 15px; font-weight: 650; margin: 0; }
+  .camera-video { position: relative; background: #000; border-radius: 10px; overflow: hidden; margin-bottom: 10px; }
+  .camera video { display: block; width: 100%; max-height: 60vh; object-fit: contain; }
+  .camera video.specchio { transform: scaleX(-1); }
+  .rec-punto { position: absolute; top: 10px; left: 10px; padding: 2px 8px; border-radius: 6px;
+               background: var(--danger); color: #fff; font-size: 12px; font-weight: 700; }
+  .camera .progresso { margin-bottom: 10px; }
+  #progressoCamera { height: 100%; width: 0; background: var(--danger); }
+  #registraCamera.rec { background: var(--danger); border-color: var(--danger); }
+  .camera .stato { margin: 10px 0 0; }
 </style>
 </head>
 <body>
@@ -142,6 +158,7 @@
       <input type="url" id="url" placeholder="Incolla il link diretto a una GIF" required>
       <button type="submit">Carica</button>
       <button type="button" id="scegliFile">Da file…</button>
+      <button type="button" id="apriCamera">📷 Fotocamera</button>
       <input type="file" id="file" accept="image/gif,image/webp,image/png" hidden>
     </form>
     <div class="board">
@@ -158,7 +175,7 @@
       <span class="spazio" style="flex:1"></span>
       <button id="svuotaLibreria" class="piccolo">Svuota</button>
     </div>
-    <p id="libreriaVuota">Le GIF caricate da un link compaiono qui: cliccane una per riprodurla.</p>
+    <p id="libreriaVuota">Le GIF caricate da un link o create con la fotocamera compaiono qui: cliccane una per riprodurla.</p>
     <ul class="libreria" id="libreria"></ul>
   </section>
 
@@ -256,6 +273,25 @@
     </aside>
   </div>
 </main>
+
+<!-- Fotocamera: filma qualche secondo e lo trasforma in una GIF della libreria -->
+<dialog id="camera" class="camera">
+  <div class="camera-testa">
+    <h2>Crea una GIF con la fotocamera</h2>
+    <button id="chiudiCamera" class="piccolo">Chiudi</button>
+  </div>
+  <div class="camera-video">
+    <video id="video" playsinline muted autoplay></video>
+    <span class="rec-punto" id="recPunto" hidden>● REC</span>
+  </div>
+  <div class="progresso"><div id="progressoCamera"></div></div>
+  <div class="sotto">
+    <button id="giraCamera">🔄 Gira</button>
+    <button id="registraCamera" class="primary">⏺ Registra</button>
+    <span class="info" id="tempoCamera">0,0 / 5,0 s</span>
+  </div>
+  <p class="stato" id="statoCamera"></p>
+</dialog>
 
 <script>
 const W = 256, H = 64;    // superficie fisica: i due schermi affiancati
@@ -422,9 +458,20 @@ $('formUrl').onsubmit = ev => {
 let richiesta = 0;
 
 // riordina = false quando si scorre la libreria con l'encoder, così l'ordine resta fermo
+let urlCorrente = '';  // voce della libreria in riproduzione (link oppure "locale:…")
+
 async function caricaUrl(url, riordina = true) {
   const mia = ++richiesta;  // se nel frattempo si chiede un'altra GIF, questa viene scartata
-  $('url').value = url;
+  urlCorrente = url;
+  $('url').value = eLocale(url) ? '' : url;
+  if (eLocale(url)) {
+    // GIF creata con la fotocamera: è salvata in questo browser
+    const blob = await leggiGifLocale(url).catch(() => null);
+    if (mia !== richiesta) return;
+    if (!blob) { setStato($('statoGif'), 'Questa GIF non è più disponibile in questo browser.', 'err'); return; }
+    if (await carica(await blob.arrayBuffer(), 'image/gif') && riordina) aggiungiALibreria(url);
+    return;
+  }
   setStato($('statoGif'), 'Scarico la GIF…');
   let risposta;
   try {
@@ -460,7 +507,7 @@ zona.addEventListener('drop', async ev => {
 
 // I file da disco non finiscono in libreria (non hanno un link da richiamare)
 async function caricaFile(f) {
-  if (await carica(await f.arrayBuffer(), f.type || 'image/gif')) { $('url').value = ''; mostraLibreria(); }
+  if (await carica(await f.arrayBuffer(), f.type || 'image/gif')) { $('url').value = ''; urlCorrente = ''; mostraLibreria(); }
 }
 
 // Decodifica una volta sola tutti i frame e li tiene in memoria come immagini
@@ -529,35 +576,189 @@ function salvaLibreria() {
 }
 
 function aggiungiALibreria(url) {
-  libreria = [url, ...libreria.filter(u => u !== url)].slice(0, MAX_LIBRERIA);
+  const nuova = [url, ...libreria.filter(u => u !== url)];
+  nuova.slice(MAX_LIBRERIA).forEach(togliDaLibreria);  // le più vecchie escono (e si cancellano)
+  libreria = nuova.slice(0, MAX_LIBRERIA);
   salvaLibreria();
 }
 
+function togliDaLibreria(url) {
+  libreria = libreria.filter(u => u !== url);
+  if (eLocale(url)) {
+    cancellaGifLocale(url).catch(() => {});
+    if (miniatureLocali.has(url)) { URL.revokeObjectURL(miniatureLocali.get(url)); miniatureLocali.delete(url); }
+  }
+}
+
+// ---------- GIF create con la fotocamera: salvate in questo browser (IndexedDB) ----------
+const eLocale = url => url.startsWith('locale:');
+const miniatureLocali = new Map();  // voce -> object URL per la miniatura
+const db = new Promise((ok, ko) => {
+  const r = indexedDB.open('oled-gif', 1);
+  r.onupgradeneeded = () => r.result.createObjectStore('gif');
+  r.onsuccess = () => ok(r.result);
+  r.onerror = () => ko(r.error);
+});
+db.catch(() => {});
+
+async function archivio(modo, operazione) {
+  const d = await db;
+  return new Promise((ok, ko) => {
+    const tx = d.transaction('gif', modo), req = operazione(tx.objectStore('gif'));
+    tx.oncomplete = () => ok(req.result);
+    tx.onerror = () => ko(tx.error);
+  });
+}
+const salvaGifLocale = (id, blob) => archivio('readwrite', st => st.put(blob, id));
+const leggiGifLocale = id => archivio('readonly', st => st.get(id));
+const cancellaGifLocale = id => archivio('readwrite', st => st.delete(id));
+
+async function miniaturaLocale(url, img) {
+  if (!miniatureLocali.has(url)) {
+    const blob = await leggiGifLocale(url).catch(() => null);
+    if (!blob) return;
+    miniatureLocali.set(url, URL.createObjectURL(blob));
+  }
+  img.src = miniatureLocali.get(url);
+}
+
 function mostraLibreria() {
-  const corrente = $('url').value;
+  const corrente = urlCorrente;
   $('libreriaVuota').hidden = libreria.length > 0;
   $('svuotaLibreria').hidden = libreria.length === 0;
   $('libreria').replaceChildren(...libreria.map(url => {
     const voce = document.createElement('li');
     voce.className = 'voce' + (url === corrente ? ' attiva' : '');
     const apri = document.createElement('button');
-    apri.className = 'miniatura'; apri.title = url;
+    apri.className = 'miniatura'; apri.title = eLocale(url) ? 'GIF dalla fotocamera' : url;
     apri.onclick = () => { caricaUrl(url); };
     const anteprima = document.createElement('img');
-    anteprima.src = url; anteprima.alt = ''; anteprima.loading = 'lazy';
+    anteprima.alt = ''; anteprima.loading = 'lazy';
+    if (eLocale(url)) miniaturaLocale(url, anteprima); else anteprima.src = url;
     apri.append(anteprima);
     const togli = document.createElement('button');
     togli.className = 'togli'; togli.textContent = '×'; togli.title = 'Rimuovi dalla libreria';
-    togli.onclick = () => { libreria = libreria.filter(u => u !== url); salvaLibreria(); };
+    togli.onclick = () => { togliDaLibreria(url); salvaLibreria(); };
     voce.append(apri, togli);
     return voce;
   }));
 }
 
 $('svuotaLibreria').onclick = () => {
-  if (confirm('Rimuovere tutte le GIF dalla libreria?')) { libreria = []; salvaLibreria(); }
+  if (confirm('Rimuovere tutte le GIF dalla libreria?')) { [...libreria].forEach(togliDaLibreria); salvaLibreria(); }
 };
 mostraLibreria();
+
+// ---------- Fotocamera: filma e crea una GIF ----------
+const DURATA_MAX_CAMERA = 5000;  // ms
+const FPS_CAMERA = 12;           // abbastanza fluido per gli OLED, e la GIF resta leggera
+const LATO_MAX_CAMERA = 320;     // gli schermi sono 256 x 64: non serve di più
+const caricaGifenc = () => import('https://cdn.jsdelivr.net/npm/gifenc@1.0.3/dist/gifenc.esm.js');
+let flusso = null, frontale = false, registrandoCamera = false, creandoGif = false;
+let fotogrammiCamera = [], timerCamera = null, inizioCamera = 0;
+
+$('apriCamera').onclick = () => { $('camera').showModal(); avviaCamera(); caricaGifenc().catch(() => {}); };
+$('chiudiCamera').onclick = () => $('camera').close();
+$('camera').addEventListener('close', () => { fermaRegistrazioneCamera(false); spegniCamera(); });
+$('giraCamera').onclick = () => { if (!registrandoCamera) { frontale = !frontale; avviaCamera(); } };
+$('registraCamera').onclick = () => registrandoCamera ? fermaRegistrazioneCamera(true) : avviaRegistrazioneCamera();
+
+async function avviaCamera() {
+  spegniCamera();
+  if (!navigator.mediaDevices?.getUserMedia) {
+    setStato($('statoCamera'), 'Fotocamera non disponibile: la pagina deve essere aperta in HTTPS.', 'err');
+    return;
+  }
+  try {
+    flusso = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: frontale ? 'user' : 'environment', width: { ideal: 640 }, height: { ideal: 480 } },
+      audio: false,
+    });
+    $('video').srcObject = flusso;
+    $('video').classList.toggle('specchio', frontale);
+    setStato($('statoCamera'), `Premi Registra: fino a ${DURATA_MAX_CAMERA / 1000} secondi.`);
+  } catch (e) {
+    setStato($('statoCamera'), 'Impossibile accedere alla fotocamera: ' + e.message, 'err');
+  }
+}
+
+function spegniCamera() {
+  flusso?.getTracks().forEach(t => t.stop());
+  flusso = null;
+  $('video').srcObject = null;
+}
+
+function aggiornaTempoCamera(ms) {
+  $('progressoCamera').style.width = Math.min(100, ms / DURATA_MAX_CAMERA * 100) + '%';
+  $('tempoCamera').textContent =
+    `${(ms / 1000).toFixed(1).replace('.', ',')} / ${(DURATA_MAX_CAMERA / 1000).toFixed(1).replace('.', ',')} s`;
+}
+
+function avviaRegistrazioneCamera() {
+  const v = $('video');
+  if (!flusso || !v.videoWidth || creandoGif) return;
+  const s = Math.min(1, LATO_MAX_CAMERA / Math.max(v.videoWidth, v.videoHeight));
+  const w = Math.round(v.videoWidth * s), h = Math.round(v.videoHeight * s);
+  const tela = new OffscreenCanvas(w, h), c = tela.getContext('2d', { willReadFrequently: true });
+  if (frontale) c.setTransform(-1, 0, 0, 1, w, 0);  // la GIF come la vedi nell'anteprima
+  fotogrammiCamera = []; registrandoCamera = true; inizioCamera = performance.now();
+  $('registraCamera').textContent = '■ Ferma'; $('registraCamera').classList.add('rec');
+  $('recPunto').hidden = false; $('giraCamera').disabled = true;
+  setStato($('statoCamera'), 'Registrazione in corso…');
+  const cattura = () => {
+    const t = performance.now() - inizioCamera;
+    if (t >= DURATA_MAX_CAMERA) return fermaRegistrazioneCamera(true);
+    c.drawImage(v, 0, 0, w, h);
+    fotogrammiCamera.push({ rgba: c.getImageData(0, 0, w, h).data, w, h, t });
+    aggiornaTempoCamera(t);
+  };
+  cattura();
+  timerCamera = setInterval(cattura, 1000 / FPS_CAMERA);
+}
+
+function fermaRegistrazioneCamera(crea) {
+  if (!registrandoCamera) return;
+  clearInterval(timerCamera);
+  registrandoCamera = false;
+  const fine = Math.min(performance.now() - inizioCamera, DURATA_MAX_CAMERA);
+  $('registraCamera').textContent = '⏺ Registra'; $('registraCamera').classList.remove('rec');
+  $('recPunto').hidden = true; $('giraCamera').disabled = false;
+  const fotogrammi = fotogrammiCamera; fotogrammiCamera = [];
+  if (crea && fotogrammi.length > 1) creaGif(fotogrammi, fine);
+  else if (crea) setStato($('statoCamera'), 'Registrazione troppo corta: riprova.', 'err');
+}
+
+// Codifica i fotogrammi in una vera GIF, la salva nel browser e la aggiunge alla libreria
+async function creaGif(fotogrammi, fine) {
+  creandoGif = true;
+  $('registraCamera').disabled = true;
+  try {
+    setStato($('statoCamera'), 'Creo la GIF…');
+    const { GIFEncoder, quantize, applyPalette } = await caricaGifenc();
+    const gif = GIFEncoder();
+    for (let k = 0; k < fotogrammi.length; k++) {
+      const f = fotogrammi[k];
+      const palette = quantize(f.rgba, 128);  // tanto poi diventa bianco e nero: 128 colori bastano
+      const durata = (k + 1 < fotogrammi.length ? fotogrammi[k + 1].t : fine) - f.t;
+      gif.writeFrame(applyPalette(f.rgba, palette), f.w, f.h,
+                     { palette, delay: Math.max(20, Math.round(durata / 10) * 10) });
+      if (k % 4 === 0) {
+        setStato($('statoCamera'), `Creo la GIF… ${k + 1}/${fotogrammi.length}`);
+        await new Promise(r => setTimeout(r));  // lascia respirare la pagina
+      }
+    }
+    gif.finish();
+    const id = 'locale:' + Date.now();
+    await salvaGifLocale(id, new Blob([gif.bytes()], { type: 'image/gif' }));
+    $('camera').close();
+    await caricaUrl(id);  // la riproduce e la mette in cima alla libreria
+  } catch (e) {
+    setStato($('statoCamera'), 'Impossibile creare la GIF: ' + e.message, 'err');
+  } finally {
+    creandoGif = false;
+    $('registraCamera').disabled = false;
+  }
+}
 
 // ---------- Posizione e dimensione ----------
 let zoom = 1, ox = 0, oy = 0;  // zoom rispetto all'adattamento scelto, spostamento in pixel logici
@@ -889,10 +1090,11 @@ function scorriLibreria(d) {
   const n = libreria.length;
   if (!n) return;
   // Se la GIF attuale non è in libreria si parte dalla prima (orario) o dall'ultima (antiorario)
-  const i = libreria.indexOf($('url').value);
+  const i = libreria.indexOf(urlCorrente);
   const base = i >= 0 ? i : d > 0 ? -1 : 0;
   const url = libreria[((base + d) % n + n) % n];
-  $('url').value = url;
+  urlCorrente = url;
+  $('url').value = eLocale(url) ? '' : url;
   mostraLibreria();
   document.querySelector('.voce.attiva')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   clearTimeout(attesaGif);
