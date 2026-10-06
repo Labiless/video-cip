@@ -67,9 +67,21 @@ const pixel = new Uint8Array(W * H);
 let porta = null, writer = null, coda = [];
 const enc = new TextEncoder();
 
-if (!('serial' in navigator)) {
+// Su Android Chrome la Web Serial spesso trova la board ma non riesce ad aprirla
+// ("could not find android serial service"): lì si passa da WebUSB, con il polyfill di Google
+// che offre la stessa interfaccia della Web Serial. Con ?webusb nell'indirizzo lo si forza ovunque.
+const USA_WEBUSB = 'usb' in navigator &&
+  (/Android/i.test(navigator.userAgent) || new URLSearchParams(location.search).has('webusb') || !('serial' in navigator));
+// Caricato subito: al click requestPort deve partire senza attese, altrimenti il browser lo blocca
+const polyfillSeriale = USA_WEBUSB
+  ? import('https://cdn.jsdelivr.net/npm/web-serial-polyfill@1.0.15/dist/serial.js').then(m => m.serial)
+  : null;
+polyfillSeriale?.catch(() => {});
+const apiSeriale = async () => USA_WEBUSB ? await polyfillSeriale : navigator.serial;
+
+if (!('serial' in navigator || 'usb' in navigator)) {
   document.getElementById('avviso').textContent =
-    'Questo browser non supporta Web Serial: apri la pagina con Chrome o Edge.';
+    'Questo browser non supporta Web Serial né WebUSB: apri la pagina con Chrome o Edge.';
   btnConnetti.disabled = true;
 }
 
@@ -83,7 +95,7 @@ pulisciTela();
 
 btnConnetti.onclick = async () => {
   try {
-    porta = await navigator.serial.requestPort();
+    porta = await (await apiSeriale()).requestPort();
     await porta.open({ baudRate: 115200 });
     // DTR alto = "pagina collegata": la board non riproduce la registrazione salvata
     await porta.setSignals({ dataTerminalReady: true }).catch(() => {});
@@ -96,11 +108,13 @@ btnConnetti.onclick = async () => {
   }
 };
 
-navigator.serial?.addEventListener('disconnect', () => {
+function scollegata() {
   writer = null; porta = null;
   setStato('Board scollegata', 'err');
   btnConnetti.disabled = false;
-});
+}
+navigator.serial?.addEventListener('disconnect', scollegata);
+navigator.usb?.addEventListener('disconnect', () => { if (USA_WEBUSB && porta) scollegata(); });
 
 document.getElementById('cancella').onclick = () => { pulisciTela(); invia('C'); };
 
